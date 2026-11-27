@@ -72,7 +72,9 @@ export function extractAmount(text: string): number | undefined {
 
 // Pure, testable: transcript (+ whether we're waiting on a read-back) -> intent.
 export function interpret(transcript: string, ctx: { awaitingConfirm?: boolean } = {}): Interpretation {
-  const t = ` ${transcript.toLowerCase().trim()} `;
+  // Lowercase + collapse punctuation to spaces, so "Yes." / "Nahi, cancel." match
+  // (Sarvam returns punctuated transcripts). Digits are kept, so amounts survive.
+  const t = ` ${transcript.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
 
   if (ctx.awaitingConfirm) {
     if (hasWord(t, NO)) return { intent: "UNKNOWN", isNo: true, transcript };

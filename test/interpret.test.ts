@@ -45,3 +45,13 @@ test("extractAmount: digits and spoken numbers", () => {
   assert.equal(extractAmount("three hundred twenty"), 320);
   assert.equal(extractAmount("five fifty"), 550);
 });
+
+test("read-back handles punctuated yes/no (Sarvam returns punctuation)", () => {
+  assert.equal(interpret("Yes.", { awaitingConfirm: true }).isYes, true);
+  assert.equal(interpret("Yes, three twenty.", { awaitingConfirm: true }).isYes, true);
+  assert.equal(interpret("Haan.", { awaitingConfirm: true }).isYes, true);
+  assert.equal(interpret("No.", { awaitingConfirm: true }).isNo, true);
+  assert.equal(interpret("Nahi, cancel.", { awaitingConfirm: true }).isNo, true);
+  // punctuation must not break amount extraction
+  assert.equal(interpret("collected 320 rupees.").amount, 320);
+});
