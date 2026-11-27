@@ -15,9 +15,26 @@ export async function POST(request: Request) {
   } catch {
     return jsonError("Invalid JSON body", 400);
   }
-  const text = (body.text ?? "").trim().slice(0, 500);
+  let text = (body.text ?? "").trim().slice(0, 500);
   const lang = body.lang ?? "en-IN";
   if (!text) return jsonError("Missing 'text'", 400);
+  // Reply in the rider's language: translate the English feedback first (keep
+  // English on any failure), then speak it. So Kannada in -> Kannada out.
+  if (lang !== "en-IN") {
+    try {
+      const tr = await fetch("https://api.sarvam.ai/translate", {
+        method: "POST",
+        headers: { "api-subscription-key": key, "Content-Type": "application/json" },
+        body: JSON.stringify({ input: text, source_language_code: "en-IN", target_language_code: lang, model: "sarvam-translate:v1" }),
+      });
+      if (tr.ok) {
+        const td = (await tr.json()) as { translated_text?: string };
+        if (td.translated_text) text = td.translated_text;
+      }
+    } catch {
+      /* keep English */
+    }
+  }
   try {
     const res = await fetch("https://api.sarvam.ai/text-to-speech", {
       method: "POST",

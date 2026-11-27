@@ -85,3 +85,18 @@ export function interpret(transcript: string, ctx: { awaitingConfirm?: boolean }
   }
   return { intent: "UNKNOWN", amount: extractAmount(t), transcript };
 }
+
+// The sensible next intents for a given order state — passed to the model so it
+// can disambiguate (e.g. after DELIVERED, "collect" means cash, not pickup).
+export function likelyActions(status?: string): IntentType[] {
+  switch (status) {
+    case "AVAILABLE": return ["ACCEPT_ORDER"];
+    case "ACCEPTED": return ["START_NAVIGATION", "MARK_PICKED_UP", "CALL_CUSTOMER"];
+    case "NAVIGATING_PICKUP": return ["MARK_PICKED_UP", "CALL_CUSTOMER"];
+    case "PICKED_UP": return ["START_NAVIGATION", "MARK_DELIVERED", "CALL_CUSTOMER"];
+    case "NAVIGATING_DROP": return ["MARK_DELIVERED", "CALL_CUSTOMER"];
+    case "DELIVERED": return ["RECORD_CASH"];
+    case "PAID": return ["NEXT_ORDER"];
+    default: return [];
+  }
+}

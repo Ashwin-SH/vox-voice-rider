@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { jsonError } from "@/lib/http";
-import { interpret, extractAmount, type Interpretation } from "@/lib/interpret";
+import { interpret, extractAmount, likelyActions, type Interpretation } from "@/lib/interpret";
 import type { IntentType } from "@/lib/intents";
 
 export const runtime = "nodejs";
@@ -60,7 +60,9 @@ For cash, extract the rupee amount as a number. If the rider is answering a yes/
 Reply with ONLY compact JSON: {"intent":"...","amount":<number>,"isYes":<bool>,"isNo":<bool>}. Omit fields that don't apply. Use UNKNOWN if genuinely unclear.`;
 
 function ctxLine(body: Body): string {
-  return `Current order status: ${body.status ?? "unknown"}.${body.awaitingConfirm ? " The rider is answering a yes/no read-back for a cash amount." : ""}`;
+  const likely = likelyActions(body.status);
+  const likelyStr = likely.length ? ` Given this state, the most likely commands right now are: ${likely.join(", ")} — prefer these when the wording is ambiguous (e.g. after DELIVERED, "collect"/"collect maadide"/"cash togondidini" means RECORD_CASH, not pickup).` : "";
+  return `Current order status: ${body.status ?? "unknown"}.${likelyStr}${body.awaitingConfirm ? " The rider is answering a yes/no read-back for a cash amount." : ""}`;
 }
 
 function parseModelJson(text: string, transcript: string): Interpretation {

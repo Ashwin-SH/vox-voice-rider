@@ -5,6 +5,7 @@ import { useCallback, useRef } from "react";
 export interface VoiceResult {
   transcript: string;
   confidence: number;
+  language?: string; // detected by Sarvam STT (for replying in the same language)
 }
 
 // Pick a file extension that matches what MediaRecorder actually produced
@@ -142,8 +143,8 @@ export function useVoice() {
                 finish(() => reject(new Error("stt-failed")));
                 return;
               }
-              const d = (await res.json()) as { transcript?: string; confidence?: number };
-              finish(() => resolve({ transcript: d.transcript ?? "", confidence: typeof d.confidence === "number" ? d.confidence : 0.9 }));
+              const d = (await res.json()) as { transcript?: string; confidence?: number; language?: string };
+              finish(() => resolve({ transcript: d.transcript ?? "", confidence: typeof d.confidence === "number" ? d.confidence : 0.9, language: d.language ?? undefined }));
             } catch (err) {
               finish(() => reject(err instanceof Error ? err : new Error("stt-error")));
             }

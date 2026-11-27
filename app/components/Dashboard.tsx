@@ -236,9 +236,12 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
       flash("blocked", 1800);
       return;
     }
-    const sp = (t: string) => (hasSarvam ? speech.speakSarvam(t, voiceLang) : speech.speak(t, voiceLang));
+    // Reply language: default to the picker, but switch to whatever Sarvam
+    // detected the rider actually spoke (so Kannada in → Kannada out).
+    let replyLang = voiceLang;
+    const sp = (t: string) => (hasSarvam ? speech.speakSarvam(t, replyLang) : speech.speak(t, voiceLang));
 
-    let heard: { transcript: string; confidence: number };
+    let heard: { transcript: string; confidence: number; language?: string };
     try {
       setVoice("listening");
       heard = hasSarvam ? await speech.listenSarvam() : await speech.listen(voiceLang);
@@ -247,6 +250,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
       setVoice("idle");
       return;
     }
+    if (heard.language) replyLang = heard.language;
     if (!heard.transcript.trim()) {
       setFeedback("I didn't catch that — say it again.");
       void sp("I didn't catch that. Please say it again.");
