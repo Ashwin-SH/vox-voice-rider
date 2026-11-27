@@ -13,6 +13,21 @@ export interface Metrics {
   tapsOldWay: number; // screen taps the completed actions would have cost
 }
 
+// One line of the live trace — a real interaction, whether the engine decided it
+// or the client answered it (go-online / questions). Nothing here is scripted.
+export interface TraceEntry {
+  id: number;
+  at: number;
+  source: "voice" | "manual" | "wake";
+  transcript?: string;
+  intent: string;
+  language?: string;
+  confidence?: number;
+  decision?: Decision; // present when the engine handled it
+  answer?: string; // present when the client answered it
+  latencyMs?: number;
+}
+
 const vColor = (v?: string) =>
   v === "PASSED" ? "var(--accent)" : v === "BLOCKED" ? "var(--danger)" : v === "CONFIRM_REQUIRED" ? "var(--warn)" : "var(--muted)";
 
@@ -25,16 +40,18 @@ function Row({ label, value, color }: { label: string; value: string; color?: st
   );
 }
 
-// The judge view: a discreet panel that shows the structured decision VOX made
-// for the last command — read live from the real /api/intent response, not
-// scripted — plus running metrics and the screen-taps-saved counter.
+const hhmmss = (t: number) => new Date(t).toLocaleTimeString("en-GB");
+
+// The judge view: a discreet panel showing the live decision trace — read straight
+// from the real engine responses and client events, nothing scripted — plus the
+// detailed last decision, running metrics and the taps-saved counter.
 export default function DecisionPanel({
-  decision,
+  trace,
   metrics,
   open,
   onClose,
 }: {
-  decision: Decision | null;
+  trace: TraceEntry[];
   metrics: Metrics;
   open: boolean;
   onClose: () => void;
@@ -42,7 +59,7 @@ export default function DecisionPanel({
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
-    closeRef.current?.focus(); // move focus into the dialog
+    closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -51,30 +68,55 @@ export default function DecisionPanel({
   }, [open, onClose]);
 
   if (!open) return null;
-  const d = decision;
+
+  const last = [...trace].reverse().find((e) => e.decision) ?? null;
+  const d = last?.decision ?? null;
   const pct = (c?: number) => (typeof c === "number" ? `${Math.round(c * 100)}%` : "—");
-  const geo = d?.geo
-    ? `${d.geo.distanceM} m (limit ${d.geo.thresholdM} m) ${d.geo.within ? "✓ inside" : "✗ outside"}`
-    : "—";
+  const geo = d?.geo ? `${d.geo.distanceM} m (limit ${d.geo.thresholdM} m) ${d.geo.within ? "✓ inside" : "✗ outside"}` : "—";
+  const recent = [...trace].slice(-12).reverse();
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
       <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)" }} aria-hidden="true" />
-      <div role="dialog" aria-modal="true" aria-label="VOX decision panel" style={{ position: "relative", width: "100%", maxWidth: 480, margin: "0 auto", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px 16px 0 0", padding: 16, maxHeight: "82vh", overflowY: "auto" }}>
+      <div role="dialog" aria-modal="true" aria-label="VOX trace panel" style={{ position: "relative", width: "100%", maxWidth: 480, margin: "0 auto", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px 16px 0 0", padding: 16, maxHeight: "86vh", overflowY: "auto" }}>
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>VOX decision · judge view</div>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>VOX Trace · judge view</div>
             <div style={{ fontSize: 11, color: "var(--muted)" }}>live from the validation engine — nothing scripted</div>
           </div>
           <button ref={closeRef} onClick={onClose} aria-label="Close panel" style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontSize: 14 }}>✕</button>
         </header>
 
-        {/* Last decision */}
-        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "var(--muted)", margin: "10px 0 2px" }}>Last command</div>
+        {/* Live event log */}
+        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "var(--muted)", margin: "10px 0 4px" }}>Live events</div>
+        {recent.length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 180, overflowY: "auto", fontFamily: "ui-monospace, Menlo, monospace" }}>
+            {recent.map((e) => {
+              const v = e.decision?.validation;
+              const badge = e.decision ? v : e.answer ? "ANSWER" : "—";
+              return (
+                <div key={e.id} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11, borderBottom: "1px solid var(--border)", paddingBottom: 3 }}>
+                  <span style={{ color: "var(--muted)" }}>{hhmmss(e.at)}</span>
+                  <span>{e.source === "manual" ? "🖲" : e.source === "wake" ? "✨" : "🎙"}</span>
+                  <span style={{ flex: 1, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {e.transcript ? `“${e.transcript}”` : e.intent}
+                  </span>
+                  <span style={{ color: vColor(v), fontWeight: 700 }}>{badge}</span>
+                  {typeof e.latencyMs === "number" && <span style={{ color: "var(--muted)" }}>{e.latencyMs}ms</span>}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: "var(--muted)", padding: "8px 0" }}>Speak to VOX to see live decisions.</div>
+        )}
+
+        {/* Last engine decision (detail) */}
+        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "var(--muted)", margin: "16px 0 2px" }}>Last engine decision</div>
         {d ? (
           <>
             <Row label="Intent" value={d.intent} />
-            <Row label="Language" value={d.language ?? "— (voice adds this)"} />
+            <Row label="Language" value={d.language ?? "—"} />
             <Row label="Confidence" value={pct(d.confidence)} />
             <Row label="State" value={`${d.statusBefore ?? "—"} → ${d.statusAfter ?? "(no change)"}`} />
             <Row label="GPS / geofence" value={geo} color={d.geo ? (d.geo.within ? "var(--accent)" : "var(--danger)") : undefined} />
@@ -83,7 +125,7 @@ export default function DecisionPanel({
             {d.reason && <Row label="Reason" value={d.reason} color="var(--danger)" />}
           </>
         ) : (
-          <div style={{ fontSize: 13, color: "var(--muted)", padding: "8px 0" }}>Run a command to see the decision.</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", padding: "8px 0" }}>Run a ride action to see the decision.</div>
         )}
 
         {/* Metrics */}
@@ -97,7 +139,7 @@ export default function DecisionPanel({
         <div style={{ display: "flex", gap: 10 }}>
           <div style={{ flex: 1, background: "var(--surface-2)", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
             <div style={{ fontSize: 26, fontWeight: 800, color: "var(--accent)" }}>0</div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>by voice (Part 5)</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>by voice</div>
           </div>
           <div style={{ flex: 1, background: "var(--surface-2)", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
             <div style={{ fontSize: 26, fontWeight: 800, color: "var(--text)" }}>~{metrics.tapsOldWay}</div>
