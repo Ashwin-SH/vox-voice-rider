@@ -112,11 +112,12 @@ export function decide(order: Order | null, input: IntentInput): Decision {
         input.amount > MAX_CASH
       )
         return { ...base, validation: "CONFIRM_REQUIRED", action: "ASK_AMOUNT", feedback: "How much did you collect?" };
-      // The collected cash must equal the order's COD total: a misheard
-      // "two thousand" on a ₹62 order must never record. Mismatch → re-ask.
-      if (input.amount !== order.earnings)
+      // The collected cash must equal the order's COD total (what the customer
+      // pays), NOT the rider's payout. A misheard "two thousand" on a ₹320 order
+      // must never record. Mismatch → re-ask.
+      if (input.amount !== order.cod_amount)
         return { ...base, validation: "CONFIRM_REQUIRED", action: "CONFIRM_AMOUNT", amount: input.amount,
-          feedback: `I heard ₹${input.amount}, but this order is ₹${order.earnings}. Please say the correct amount.` };
+          feedback: `I heard ₹${input.amount}, but this order collects ₹${order.cod_amount}. Please say the correct amount.` };
       if (input.confirmed !== true)
         return { ...base, validation: "CONFIRM_REQUIRED", action: "CONFIRM_AMOUNT", amount: input.amount,
           feedback: `₹${input.amount} collected — say yes to confirm.` };

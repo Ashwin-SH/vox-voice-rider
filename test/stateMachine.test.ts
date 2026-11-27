@@ -10,7 +10,7 @@ function order(status: OrderStatus): Order {
     id: "ord_1001", rider_id: null, status,
     pickup_name: "Indiranagar", pickup_lat: 12.9719, pickup_lng: 77.6412,
     drop_name: "Domlur", drop_lat: 12.9609, drop_lng: 77.6387,
-    distance_km: 6, earnings: 62, customer_name: "Priya",
+    distance_km: 1.3, earnings: 62, cod_amount: 320, customer_name: "Priya",
     customer_phone: "+91 90000 11111", created_at: new Date().toISOString(),
   };
 }
@@ -60,23 +60,24 @@ test("DELIVERED without rider location is blocked", () => {
   assert.equal(d.validation, "BLOCKED");
 });
 
-test("RECORD_CASH with amount but no confirmation asks to confirm (read-back)", () => {
+test("RECORD_CASH with matching amount but no confirmation asks to confirm (read-back)", () => {
   const d = decide(order("DELIVERED"), i({ intent: "RECORD_CASH", amount: 320 }));
   assert.equal(d.validation, "CONFIRM_REQUIRED");
-  assert.match(d.feedback, /320/);
+  assert.equal(d.action, "CONFIRM_AMOUNT");
+  assert.match(d.feedback, /say yes/i); // the read-back branch, not the mismatch branch
 });
 
-test("RECORD_CASH confirmed, amount matches order total → PAID", () => {
-  const d = decide(order("DELIVERED"), i({ intent: "RECORD_CASH", amount: 62, confirmed: true }));
+test("RECORD_CASH confirmed, amount matches COD total → PAID", () => {
+  const d = decide(order("DELIVERED"), i({ intent: "RECORD_CASH", amount: 320, confirmed: true }));
   assert.equal(d.validation, "PASSED");
   assert.equal(d.statusAfter, "PAID");
-  assert.equal(d.amount, 62);
+  assert.equal(d.amount, 320);
 });
 
-test("RECORD_CASH rejects an amount that doesn't match the order total", () => {
+test("RECORD_CASH rejects an amount that doesn't match the COD total", () => {
   const d = decide(order("DELIVERED"), i({ intent: "RECORD_CASH", amount: 2000, confirmed: true }));
   assert.notEqual(d.validation, "PASSED");
-  assert.match(d.feedback, /62/);
+  assert.match(d.feedback, /320/);
 });
 
 test("RECORD_CASH before delivery is blocked", () => {

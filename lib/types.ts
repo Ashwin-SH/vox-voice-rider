@@ -36,7 +36,8 @@ export interface Order {
   drop_lat: number;
   drop_lng: number;
   distance_km: number;
-  earnings: number;        // rupees
+  earnings: number;        // rupees — the rider's payout/fee
+  cod_amount: number;      // rupees — cash the customer hands over (COD order value)
   customer_name: string;
   customer_phone: string;
   created_at: string;

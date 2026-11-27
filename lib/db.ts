@@ -6,9 +6,10 @@ const STATUS_LIST = ORDER_STATUSES.map((x) => `'${x}'`).join(", ");
 
 // Column lists shared by the routes and the engine. PUBLIC omits customer_phone
 // (never returned to clients); FULL includes it (the call feature needs it, but
-// the API layer strips it before responding).
+// responses either use PUBLIC or strip it, so it reaches a client only via the
+// CALL side effect).
 export const ORDER_COLS_PUBLIC =
-  "id, rider_id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, customer_name, created_at";
+  "id, rider_id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, cod_amount, customer_name, created_at";
 export const ORDER_COLS_FULL = `${ORDER_COLS_PUBLIC}, customer_phone`;
 
 // A single pooled connection. We DON'T connect at import time, so the app
@@ -63,6 +64,7 @@ export async function ensureSchema(): Promise<void> {
           drop_lng      DOUBLE PRECISION NOT NULL,
           distance_km   DOUBLE PRECISION NOT NULL,
           earnings      INTEGER NOT NULL,
+          cod_amount    INTEGER NOT NULL DEFAULT 0,
           customer_name TEXT NOT NULL,
           customer_phone TEXT NOT NULL,
           created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -109,10 +111,10 @@ export async function ensureSchema(): Promise<void> {
 
 async function seed(p: Pool): Promise<void> {
   // Real-ish Bengaluru coordinates so the geofence math (Part 2) is meaningful.
-  const orders: Array<[string, string, number, number, string, number, number, number, number, string, string]> = [
-    ["ord_1001", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 1.3, 62, "Priya", "+91 90000 11111"],
-    ["ord_1002", "Koramangala", 12.9352, 77.6245, "HSR Layout", 12.9116, 77.6389, 3.0, 48, "Arjun", "+91 90000 22222"],
-    ["ord_1003", "Jayanagar", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 2.0, 44, "Sana", "+91 90000 33333"],
+  const orders: Array<[string, string, number, number, string, number, number, number, number, number, string, string]> = [
+    ["ord_1001", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 1.3, 62, 320, "Priya", "+91 90000 11111"],
+    ["ord_1002", "Koramangala", 12.9352, 77.6245, "HSR Layout", 12.9116, 77.6389, 3.0, 48, 250, "Arjun", "+91 90000 22222"],
+    ["ord_1003", "Jayanagar", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 2.0, 44, 180, "Sana", "+91 90000 33333"],
   ];
   // One transaction: either the whole seed lands or none of it does, so a retry
   // never sees a partial table and skips the rest.
@@ -127,8 +129,8 @@ async function seed(p: Pool): Promise<void> {
     for (const o of orders) {
       await client.query(
         `INSERT INTO orders
-          (id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, customer_name, customer_phone)
-         VALUES ($1,'AVAILABLE',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          (id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, cod_amount, customer_name, customer_phone)
+         VALUES ($1,'AVAILABLE',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          ON CONFLICT (id) DO NOTHING`,
         o
       );

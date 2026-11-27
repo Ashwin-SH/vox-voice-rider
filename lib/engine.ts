@@ -10,11 +10,11 @@ const MAX_TRANSCRIPT = 500;
 // The rider's single point of focus: their active order, else the next available.
 async function loadFocusOrder(): Promise<Order | null> {
   const active = await query<Order>(
-    `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status NOT IN ('AVAILABLE','PAID') ORDER BY created_at ASC LIMIT 1`
+    `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status NOT IN ('AVAILABLE','PAID') ORDER BY created_at ASC, id ASC LIMIT 1`
   );
   if (active.rows[0]) return active.rows[0];
   const next = await query<Order>(
-    `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status = 'AVAILABLE' ORDER BY created_at ASC LIMIT 1`
+    `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status = 'AVAILABLE' ORDER BY created_at ASC, id ASC LIMIT 1`
   );
   return next.rows[0] ?? null;
 }
@@ -98,7 +98,7 @@ export async function runIntent(input: IntentInput): Promise<IntentResult> {
   // "Next order" moves focus to a DIFFERENT available order (never the current one).
   if (decision.validation === "PASSED" && decision.action === "NEXT_ORDER") {
     const next = await query<Order>(
-      `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status = 'AVAILABLE' AND id <> $1 ORDER BY created_at ASC LIMIT 1`,
+      `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status = 'AVAILABLE' AND id <> $1 ORDER BY created_at ASC, id ASC LIMIT 1`,
       [order?.id ?? ""]
     );
     focus = next.rows[0] ?? null;
