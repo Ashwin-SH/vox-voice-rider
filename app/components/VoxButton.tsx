@@ -1,6 +1,6 @@
 "use client";
 
-export type VoiceState = "idle" | "listening" | "processing" | "speaking" | "blocked";
+export type VoiceState = "idle" | "listening" | "processing" | "speaking" | "blocked" | "confirm";
 
 // Each pipeline state has an unmistakable colour + label, so a rider (or a judge)
 // can read what VOX is doing at a glance, in traffic.
@@ -10,6 +10,7 @@ const STATES: Record<VoiceState, { label: string; sub: string; color: string; ri
   processing: { label: "Thinking",     sub: "understanding",    color: "var(--warn)",   ring: "rgba(245,166,35,0.26)", pulse: true },
   speaking:   { label: "Speaking",     sub: "VOX responds",     color: "#16a34a",       ring: "rgba(22,163,74,0.26)",  pulse: true },
   blocked:    { label: "Blocked",      sub: "not allowed",      color: "var(--danger)", ring: "rgba(255,89,100,0.30)", pulse: false },
+  confirm:    { label: "Confirm?",     sub: "yes to record",    color: "var(--warn)",   ring: "rgba(245,166,35,0.28)", pulse: true },
 };
 
 export default function VoxButton({ state, onPress }: { state: VoiceState; onPress?: () => void }) {

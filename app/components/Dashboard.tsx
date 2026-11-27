@@ -46,6 +46,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
   const [online, setOnline] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{ intent: IntentType; amount: number } | null>(null);
   const busyRef = useRef(false); // synchronous guard — airtight against a double tap
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -73,12 +74,13 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
     window.addEventListener("offline", set);
     const id = setInterval(async () => {
       try {
-        const r = await fetch("/api/health", { cache: "no-store" });
+        // strict=1 → 503 when the DB is down, so the dot reflects real health.
+        const r = await fetch("/api/health?strict=1", { cache: "no-store" });
         setOnline(r.ok);
       } catch {
         setOnline(false);
       }
-    }, 8000);
+    }, 30000);
     return () => {
       window.removeEventListener("online", set);
       window.removeEventListener("offline", set);
@@ -100,7 +102,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
   };
 
   const send = useCallback(
-    async (intent: IntentType, kind?: "geo" | "cash") => {
+    async (intent: IntentType, kind?: "geo" | "cash", confirm?: { amount: number }) => {
       if (busyRef.current) return;
       busyRef.current = true;
       setBusy(true);
@@ -113,10 +115,13 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         body.riderLat = order.drop_lat;
         body.riderLng = order.drop_lng;
       }
-      // Cash collected is the customer's COD total, not the rider's payout.
+      // Cash = the customer's COD total (not the rider's payout). The first tap
+      // sends the amount WITHOUT `confirmed`, so the engine asks for a read-back;
+      // `confirmed` is supplied only after the rider agrees. Part 5's voice reuses
+      // this same path, so the read-back stays real for speech.
       if (kind === "cash" && order) {
-        body.amount = order.cod_amount;
-        body.confirmed = true;
+        body.amount = confirm?.amount ?? order.cod_amount;
+        if (confirm) body.confirmed = true;
       }
       try {
         const r = await fetch("/api/intent", {
@@ -130,13 +135,21 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
           flash("blocked", 1800);
           return;
         }
-        setOrder(d.order ?? null);
-        setFeedback(d.decision?.feedback ?? "");
-        // CALL exposes the number only via the sideEffect — dial it.
-        if (d.decision?.sideEffect?.type === "CALL" && d.decision.sideEffect.value) {
-          window.location.href = `tel:${d.decision.sideEffect.value}`;
+        const dec = d.decision;
+        setFeedback(dec?.feedback ?? "");
+        if (dec?.validation === "CONFIRM_REQUIRED") {
+          // Engine wants a read-back — show the prompt and wait for the rider.
+          setPendingConfirm({ intent, amount: dec.amount ?? order?.cod_amount ?? 0 });
+          flash("confirm", 6000);
+          return;
         }
-        flash(d.decision?.validation === "BLOCKED" ? "blocked" : "speaking", 1700);
+        setPendingConfirm(null);
+        setOrder(d.order ?? null);
+        // CALL exposes the number only via the sideEffect — dial it (strip spaces).
+        if (dec?.sideEffect?.type === "CALL" && dec.sideEffect.value) {
+          window.location.href = `tel:${String(dec.sideEffect.value).replace(/[^+\d]/g, "")}`;
+        }
+        flash(dec?.validation === "BLOCKED" ? "blocked" : "speaking", 1700);
       } catch {
         setFeedback("Network error — try again.");
         flash("blocked", 1800);
@@ -147,6 +160,20 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
     },
     [order]
   );
+
+  // Rider answered the read-back → record with the echoed amount + confirmation.
+  const confirmCash = useCallback(() => {
+    if (!pendingConfirm) return;
+    const p = pendingConfirm;
+    setPendingConfirm(null);
+    void send(p.intent, "cash", { amount: p.amount });
+  }, [pendingConfirm, send]);
+
+  const cancelConfirm = useCallback(() => {
+    setPendingConfirm(null);
+    setFeedback("Cancelled.");
+    setVoice("idle");
+  }, []);
 
   const curStep = stepIndex(order?.status ?? null);
   const onTrip = order && order.status !== "AVAILABLE" && order.status !== "PAID";
@@ -239,6 +266,15 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
           }}
         />
       </section>
+
+      {/* Read-back confirmation for cash (the same path voice uses in Part 5) */}
+      {pendingConfirm && (
+        <section style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surface)", border: "1px solid var(--warn)", borderRadius: 12, padding: "10px 12px" }}>
+          <span style={{ flex: 1, fontSize: 13 }}>Collected ₹{pendingConfirm.amount}?</span>
+          <button onClick={confirmCash} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "none", background: "var(--accent)", color: "#04120d", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Yes</button>
+          <button onClick={cancelConfirm} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>No</button>
+        </section>
+      )}
 
       {/* Command chips (typed-command fallback; voice drives these in Part 5) */}
       <section style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
