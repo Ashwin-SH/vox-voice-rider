@@ -80,6 +80,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
   const [trace, setTrace] = useState<TraceEntry[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
   const [voiceLang, setVoiceLang] = useState("en-IN");
+  const [safety, setSafety] = useState<{ type: "EMERGENCY" | "HAZARD" } | null>(null);
   const [platform, setPlatform] = useState<PlatformId>("rapido");
   const [wakeOn, setWakeOn] = useState(false);
   const [wakeSupported, setWakeSupported] = useState(false);
@@ -192,6 +193,13 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
 
   useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
 
+  // A hazard report is transient; an emergency stays until the rider dismisses it.
+  useEffect(() => {
+    if (safety?.type !== "HAZARD") return;
+    const id = setTimeout(() => setSafety(null), 6000);
+    return () => clearTimeout(id);
+  }, [safety]);
+
   const flash = (state: VoiceState, ms: number) => {
     if (resetTimer.current) clearTimeout(resetTimer.current);
     setVoice(state);
@@ -254,6 +262,9 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         if (dec?.sideEffect?.type === "CALL" && dec.sideEffect.value) {
           window.location.href = `tel:${String(dec.sideEffect.value).replace(/[^+\d]/g, "")}`;
         }
+        // Surface a distinct safety state (clearly simulated) for SOS / hazard.
+        if (dec?.sideEffect?.type === "EMERGENCY") setSafety({ type: "EMERGENCY" });
+        else if (dec?.sideEffect?.type === "HAZARD") setSafety({ type: "HAZARD" });
         flash(dec?.validation === "BLOCKED" ? "blocked" : "speaking", 1700);
         return { validation: dec?.validation, feedback: dec?.feedback };
       } catch {
@@ -487,6 +498,26 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         <Stat label="Rides" value={`${sim.rides}`} />
         <Stat label="Rating" value="4.9★" />
       </section>
+
+      {/* Safety state — SOS / road hazard (clearly simulated) */}
+      {safety && (
+        <div role="alert" style={{ display: "flex", alignItems: "center", gap: 10, borderRadius: 12, padding: "12px 14px",
+          background: safety.type === "EMERGENCY" ? "rgba(255,89,100,0.16)" : "rgba(245,166,35,0.14)",
+          border: `1px solid ${safety.type === "EMERGENCY" ? "var(--danger)" : "var(--warn)"}`,
+          animation: safety.type === "EMERGENCY" ? "voxblink 1s ease-in-out infinite" : "voxrise 200ms ease" }}>
+          <span style={{ fontSize: 22 }}>{safety.type === "EMERGENCY" ? "🆘" : "⚠️"}</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: safety.type === "EMERGENCY" ? "var(--danger)" : "var(--warn)" }}>
+              {safety.type === "EMERGENCY" ? "Emergency alert sent" : "Road hazard reported"}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>
+              {safety.type === "EMERGENCY" ? "Support team + emergency contact notified · simulated for demo" : "Nearby riders warned on this route · simulated for demo"}
+            </div>
+          </div>
+          <button onClick={() => setSafety(null)} aria-label="Dismiss alert"
+            style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontSize: 13 }}>✕</button>
+        </div>
+      )}
 
       {!hasSarvam && (
         <div style={{ fontSize: 11, color: "var(--warn)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
