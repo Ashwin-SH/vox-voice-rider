@@ -17,6 +17,7 @@ export async function POST(request: Request) {
     return jsonError("Expected multipart form with 'file'", 400);
   }
   if (!(file instanceof Blob)) return jsonError("Missing audio 'file'", 400);
+  if (file.size > 10_000_000) return jsonError("Audio too large", 413); // ~>60s; cap a public endpoint
   try {
     const fd = new FormData();
     // Preserve the filename/extension (Chrome/Firefox→webm, Safari→mp4) but STRIP
@@ -31,6 +32,7 @@ export async function POST(request: Request) {
       method: "POST",
       headers: { "api-subscription-key": key },
       body: fd,
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return jsonError("STT failed", 502, await res.text());
     const data = (await res.json()) as { transcript?: string; language_code?: string; language_probability?: number };

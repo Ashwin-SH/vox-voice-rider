@@ -31,22 +31,24 @@ export async function POST(request: Request) {
   const transcript = (body.transcript ?? "").trim().slice(0, 500);
   if (!transcript) return jsonError("Missing 'transcript'", 400);
 
-  const gemini = process.env.GEMINI_API_KEY?.trim();
-  if (gemini) {
-    try {
-      const g = await interpretWithGemini(transcript, body, gemini);
-      if (g) return NextResponse.json({ ...g, source: "gemini", transcript });
-    } catch (e) {
-      console.error("[interpret] gemini failed, trying next:", e);
-    }
-  }
+  // Sarvam first — it's the India-tuned model for Kannada/Hindi/mixed, which is
+  // the point. Gemini is the secondary understanding path.
   const sarvam = process.env.SARVAM_API_KEY?.trim();
   if (sarvam) {
     try {
       const s = await interpretWithSarvam(transcript, body, sarvam);
       if (s) return NextResponse.json({ ...s, source: "sarvam", transcript });
     } catch (e) {
-      console.error("[interpret] sarvam failed, falling back to rules:", e);
+      console.error("[interpret] sarvam failed, trying next:", e);
+    }
+  }
+  const gemini = process.env.GEMINI_API_KEY?.trim();
+  if (gemini) {
+    try {
+      const g = await interpretWithGemini(transcript, body, gemini);
+      if (g) return NextResponse.json({ ...g, source: "gemini", transcript });
+    } catch (e) {
+      console.error("[interpret] gemini failed, falling back to rules:", e);
     }
   }
   const r = interpret(transcript, { awaitingConfirm: body.awaitingConfirm });
@@ -109,10 +111,10 @@ async function interpretWithSarvam(transcript: string, body: Body, key: string):
 async function interpretWithGemini(transcript: string, body: Body, key: string): Promise<Interpretation | null> {
   return withTimeout(async (signal) => {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         signal,
         body: JSON.stringify({
           contents: [{ parts: [{ text: `${SYSTEM}\n${ctxLine(body)}\nRider said: "${transcript}"` }] }],

@@ -26,6 +26,7 @@ export async function POST(request: Request) {
         method: "POST",
         headers: { "api-subscription-key": key, "Content-Type": "application/json" },
         body: JSON.stringify({ input: text, source_language_code: "en-IN", target_language_code: lang, model: "sarvam-translate:v1" }),
+        signal: AbortSignal.timeout(8000),
       });
       if (tr.ok) {
         const td = (await tr.json()) as { translated_text?: string };
@@ -40,6 +41,7 @@ export async function POST(request: Request) {
       method: "POST",
       headers: { "api-subscription-key": key, "Content-Type": "application/json" },
       body: JSON.stringify({ text, target_language_code: lang, speaker: "priya", model: "bulbul:v3" }),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return jsonError("TTS failed", 502, await res.text());
     const data = (await res.json()) as { audios?: string[] };

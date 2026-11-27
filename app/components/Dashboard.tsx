@@ -76,6 +76,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
   const [voiceLang, setVoiceLang] = useState("en-IN");
   const speech = useVoice();
   const busyRef = useRef(false); // synchronous guard — airtight against a double tap
+  const voiceActiveRef = useRef(false); // same, for the voice listen/interpret phase
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -228,7 +229,9 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
       if (hasSarvam) speech.stopRecording();
       return;
     }
-    if (voice === "processing" || busyRef.current) return;
+    // Synchronous guard against a double-tap in one tick (voice is React state,
+    // so two taps can both pass the check above). Same pattern as send()'s busyRef.
+    if (voice === "processing" || busyRef.current || voiceActiveRef.current) return;
     // Sarvam uses the mic recorder (not Web Speech), so only require Web Speech
     // support on the keyless path.
     if (!hasSarvam && !speech.isSupported) {
@@ -236,6 +239,8 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
       flash("blocked", 1800);
       return;
     }
+    voiceActiveRef.current = true;
+    try {
     // Reply language: default to the picker, but switch to whatever Sarvam
     // detected the rider actually spoke (so Kannada in → Kannada out).
     let replyLang = voiceLang;
@@ -287,6 +292,11 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         void sp(res?.feedback ?? "Recorded.");
         return;
       }
+      // Neither yes nor no — don't run a new command mid-confirmation; re-ask.
+      setFeedback("Please say yes or no to confirm.");
+      void sp("Please say yes or no to confirm.");
+      setVoice("confirm");
+      return;
     }
 
     if (!r.intent || r.intent === "UNKNOWN" || heard.confidence < CONFIDENCE_FLOOR) {
@@ -305,6 +315,9 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
     if (intent === "RECORD_CASH" && typeof r.amount === "number") opts.amount = r.amount;
     const res = await send(intent, kind, opts);
     void sp(res?.feedback ?? "");
+    } finally {
+      voiceActiveRef.current = false;
+    }
   }, [voice, hasSarvam, speech, voiceLang, pendingConfirm, order, send, confirmCash, cancelConfirm]);
 
   const curStep = stepIndex(order?.status ?? null);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 export interface VoiceResult {
   transcript: string;
@@ -90,8 +90,9 @@ export function useVoice() {
 
   // --- Sarvam path (used when the server has SARVAM_API_KEY) ---------------
   // Record the mic → /api/stt (Sarvam Saarika). Auto-stops after `maxMs`;
-  // stopRecording() ends it early. A watchdog guarantees the promise always
-  // settles (so the UI can't hang at "listening" if the mic prompt is ignored).
+  // stopRecording() ends it early. The watchdog is cleared only when the promise
+  // actually settles (in finish), so it also covers a stalled /api/stt fetch —
+  // and the fetch itself has a timeout. The UI can never hang at "listening".
   const listenSarvam = useCallback((maxMs = 6000): Promise<VoiceResult> => {
     return new Promise((resolve, reject) => {
       if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
@@ -99,14 +100,14 @@ export function useVoice() {
         return;
       }
       let settled = false;
-      const finish = (fn: () => void) => {
+      const watchdog = setTimeout(() => finish(() => reject(new Error("mic-timeout"))), maxMs + 15000);
+      function finish(fn: () => void) {
         if (!settled) {
           settled = true;
+          clearTimeout(watchdog);
           fn();
         }
-      };
-      // Watchdog: covers a mic prompt left open / getUserMedia never resolving.
-      const watchdog = setTimeout(() => finish(() => reject(new Error("mic-timeout"))), maxMs + 15000);
+      }
 
       navigator.mediaDevices
         .getUserMedia({ audio: true })
@@ -116,7 +117,6 @@ export function useVoice() {
           try {
             rec = new MediaRecorder(stream);
           } catch (err) {
-            clearTimeout(watchdog);
             stopTracks();
             finish(() => reject(err instanceof Error ? err : new Error("recorder-failed")));
             return;
@@ -127,7 +127,6 @@ export function useVoice() {
             if (e.data.size) chunks.push(e.data);
           };
           rec.onstop = async () => {
-            clearTimeout(watchdog);
             stopTracks();
             const type = rec.mimeType || "audio/webm";
             const blob = new Blob(chunks, { type });
@@ -138,13 +137,19 @@ export function useVoice() {
             try {
               const fd = new FormData();
               fd.append("file", blob, `audio.${extForType(type)}`);
-              const res = await fetch("/api/stt", { method: "POST", body: fd });
+              const res = await fetch("/api/stt", { method: "POST", body: fd, signal: AbortSignal.timeout(12000) });
               if (!res.ok) {
                 finish(() => reject(new Error("stt-failed")));
                 return;
               }
               const d = (await res.json()) as { transcript?: string; confidence?: number; language?: string };
-              finish(() => resolve({ transcript: d.transcript ?? "", confidence: typeof d.confidence === "number" ? d.confidence : 0.9, language: d.language ?? undefined }));
+              finish(() =>
+                resolve({
+                  transcript: d.transcript ?? "",
+                  confidence: typeof d.confidence === "number" ? d.confidence : 0.9,
+                  language: d.language ?? undefined,
+                })
+              );
             } catch (err) {
               finish(() => reject(err instanceof Error ? err : new Error("stt-error")));
             }
@@ -152,7 +157,6 @@ export function useVoice() {
           try {
             rec.start();
           } catch (err) {
-            clearTimeout(watchdog);
             stopTracks();
             finish(() => reject(err instanceof Error ? err : new Error("start-failed")));
             return;
@@ -165,10 +169,7 @@ export function useVoice() {
             }
           }, maxMs);
         })
-        .catch((err) => {
-          clearTimeout(watchdog);
-          finish(() => reject(err instanceof Error ? err : new Error("mic-denied")));
-        });
+        .catch((err) => finish(() => reject(err instanceof Error ? err : new Error("mic-denied"))));
     });
   }, []);
 
@@ -190,6 +191,7 @@ export function useVoice() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, lang }),
+          signal: AbortSignal.timeout(12000),
         });
         if (!res.ok) throw new Error("tts-failed");
         const blob = await res.blob();
@@ -207,5 +209,8 @@ export function useVoice() {
     [speak]
   );
 
-  return { isSupported, listen, stop, speak, listenSarvam, stopRecording, speakSarvam };
+  return useMemo(
+    () => ({ isSupported, listen, stop, speak, listenSarvam, stopRecording, speakSarvam }),
+    [isSupported, listen, stop, speak, listenSarvam, stopRecording, speakSarvam]
+  );
 }
