@@ -55,7 +55,7 @@ export interface Transaction {
 export interface TaskEvent {
   id: string;
   order_id: string | null;
-  event_type: string;      // e.g. "ACCEPT", "PICKUP", "DELIVER_BLOCKED", "CASH_RECORDED"
+  event_type: string;      // the decision's action, e.g. "ACCEPT_ORDER", "MARK_PICKED_UP", "BLOCKED", "RECORD_CASH"
   payload: Record<string, unknown>;
   created_at: string;
 }

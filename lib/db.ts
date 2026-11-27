@@ -1,4 +1,4 @@
-import { Pool, type QueryResult, type QueryResultRow } from "pg";
+import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import { ORDER_STATUSES } from "./types";
 
 // Rendered into the orders.status CHECK constraint (single source of truth).
@@ -143,4 +143,25 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   if (!isDbConfigured()) throw new Error("DATABASE_URL is not configured");
   await ensureSchema();
   return getPool().query<T>(text, params as unknown[]);
+}
+
+// Run several statements atomically on one client. Used where a multi-write must
+// be all-or-nothing (e.g. mark an order PAID *and* record its cash together).
+export async function withTransaction<T>(
+  fn: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  if (!isDbConfigured()) throw new Error("DATABASE_URL is not configured");
+  await ensureSchema();
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
