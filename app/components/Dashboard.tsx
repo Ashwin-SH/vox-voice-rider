@@ -284,9 +284,9 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         {COMMANDS.map((c) => (
           <button
             key={c.intent}
-            disabled={busy}
+            disabled={busy || !loaded}
             onClick={() => send(c.intent, c.kind)}
-            style={{ padding: "10px 4px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", fontSize: 12, fontWeight: 600, cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1 }}
+            style={{ padding: "10px 4px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", fontSize: 12, fontWeight: 600, cursor: busy || !loaded ? "default" : "pointer", opacity: busy || !loaded ? 0.5 : 1 }}
           >
             {c.label}
           </button>
