@@ -47,7 +47,7 @@ export async function ensureSchema(): Promise<void> {
         CREATE TABLE IF NOT EXISTS orders (
           id            TEXT PRIMARY KEY,
           rider_id      TEXT REFERENCES riders(id),
-          status        TEXT NOT NULL DEFAULT 'AVAILABLE' CHECK (status IN (${STATUS_LIST})),
+          status        TEXT NOT NULL DEFAULT 'AVAILABLE',
           pickup_name   TEXT NOT NULL,
           pickup_lat    DOUBLE PRECISION NOT NULL,
           pickup_lng    DOUBLE PRECISION NOT NULL,
@@ -78,6 +78,13 @@ export async function ensureSchema(): Promise<void> {
           created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS idx_events_order ON task_events(order_id);
+      `);
+      // Named status constraint applied idempotently — CREATE TABLE IF NOT EXISTS
+      // won't add a CHECK to a table from an existing volume, so enforce it here.
+      await p.query(`
+        DO $$ BEGIN
+          ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN (${STATUS_LIST}));
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$;
       `);
 
       const { rows } = await p.query<{ n: string }>(`SELECT count(*)::text AS n FROM orders`);
