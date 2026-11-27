@@ -70,6 +70,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
   const [lastDecision, setLastDecision] = useState<Decision | null>(null);
   const [history, setHistory] = useState<HistEntry[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [atDrop, setAtDrop] = useState(true); // simulated rider location for the geofence demo
   const busyRef = useRef(false); // synchronous guard — airtight against a double tap
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -132,11 +133,12 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
       if (resetTimer.current) clearTimeout(resetTimer.current);
       setVoice("processing");
       const body: Record<string, unknown> = { intent };
-      // Demo stub: simulate the rider standing at the drop so the geofence passes.
-      // (Part 6's demo controls let you place the rider "too far" to show the block.)
+      // Simulated rider location: "At drop" passes the geofence; "Far away" sends
+      // the pickup coords (~1.3 km off) so the delivery is blocked — this is what
+      // lets the demo show VOX refuse an out-of-zone delivery live in the panel.
       if (kind === "geo" && order) {
-        body.riderLat = order.drop_lat;
-        body.riderLng = order.drop_lng;
+        body.riderLat = atDrop ? order.drop_lat : order.pickup_lat;
+        body.riderLng = atDrop ? order.drop_lng : order.pickup_lng;
       }
       // Cash = the customer's COD total (not the rider's payout). The first tap
       // sends the amount WITHOUT `confirmed`, so the engine asks for a read-back;
@@ -161,10 +163,9 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         const dec = d.decision as Decision | undefined;
         // Record the real decision + measured latency for the judge panel/metrics.
         setLastDecision(dec ?? null);
-        setHistory((h) => [
-          ...h,
-          { latencyMs: typeof d.latencyMs === "number" ? d.latencyMs : 0, validation: dec?.validation, intent },
-        ]);
+        setHistory((h) =>
+          [...h, { latencyMs: typeof d.latencyMs === "number" ? d.latencyMs : 0, validation: dec?.validation, intent }].slice(-50)
+        );
         setFeedback(dec?.feedback ?? "");
         if (dec?.validation === "CONFIRM_REQUIRED") {
           // Read-back (or a mismatch the engine flagged). Always confirm the
@@ -190,7 +191,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         setBusy(false);
       }
     },
-    [order]
+    [order, atDrop]
   );
 
   // Rider answered the read-back → record with the echoed amount + confirmation.
@@ -215,8 +216,10 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
     total: history.length,
     executed: executed.length,
     blocked: history.filter((h) => h.validation === "BLOCKED").length,
+    confirms: history.filter((h) => h.validation === "CONFIRM_REQUIRED").length,
     lastLatency: history.length ? history[history.length - 1].latencyMs : null,
     avgLatency: history.length ? Math.round(history.reduce((s, h) => s + h.latencyMs, 0) / history.length) : null,
+    // Taps the COMPLETED actions would have cost in a tap-based app (estimate).
     tapsOldWay: executed.reduce((s, h) => s + (TAP_COST[h.intent] ?? 2), 0),
   };
 
@@ -317,6 +320,26 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
           <button onClick={cancelConfirm} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>No</button>
         </section>
       )}
+
+      {/* Simulated rider location — drives whether "Deliver" passes the geofence.
+          Lets the demo show VOX refusing an out-of-zone delivery. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+        <span style={{ color: "var(--muted)" }}>📍 Rider location:</span>
+        <button
+          onClick={() => setAtDrop(true)}
+          aria-pressed={atDrop}
+          style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${atDrop ? "var(--accent)" : "var(--border)"}`, background: atDrop ? "rgba(22,212,168,0.14)" : "var(--surface-2)", color: atDrop ? "var(--accent)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+        >
+          At drop
+        </button>
+        <button
+          onClick={() => setAtDrop(false)}
+          aria-pressed={!atDrop}
+          style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${!atDrop ? "var(--warn)" : "var(--border)"}`, background: !atDrop ? "rgba(245,166,35,0.14)" : "var(--surface-2)", color: !atDrop ? "var(--warn)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+        >
+          Far away
+        </button>
+      </div>
 
       {/* Command chips (typed-command fallback; voice drives these in Part 5) */}
       <section style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>

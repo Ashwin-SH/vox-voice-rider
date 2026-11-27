@@ -1,15 +1,16 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { Decision } from "@/lib/intents";
 
 export interface Metrics {
   total: number; // commands run
   executed: number; // validation === PASSED
   blocked: number; // validation === BLOCKED
+  confirms: number; // validation === CONFIRM_REQUIRED (read-backs)
   lastLatency: number | null;
   avgLatency: number | null;
-  tapsOldWay: number; // screen taps the old way would have cost
+  tapsOldWay: number; // screen taps the completed actions would have cost
 }
 
 const vColor = (v?: string) =>
@@ -38,8 +39,10 @@ export default function DecisionPanel({
   open: boolean;
   onClose: () => void;
 }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
+    closeRef.current?.focus(); // move focus into the dialog
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -63,7 +66,7 @@ export default function DecisionPanel({
             <div style={{ fontSize: 14, fontWeight: 700 }}>VOX decision · judge view</div>
             <div style={{ fontSize: 11, color: "var(--muted)" }}>live from the validation engine — nothing scripted</div>
           </div>
-          <button onClick={onClose} aria-label="Close panel" style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontSize: 14 }}>✕</button>
+          <button ref={closeRef} onClick={onClose} aria-label="Close panel" style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontSize: 14 }}>✕</button>
         </header>
 
         {/* Last decision */}
@@ -87,14 +90,14 @@ export default function DecisionPanel({
         <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "var(--muted)", margin: "16px 0 2px" }}>Metrics</div>
         <Row label="Response latency" value={metrics.lastLatency != null ? `${metrics.lastLatency} ms · avg ${metrics.avgLatency} ms` : "—"} />
         <Row label="Commands" value={`${metrics.total} run · ${metrics.executed} executed`} />
-        <Row label="Safety" value={`${metrics.blocked} blocked · 0 wrongly executed`} color={metrics.blocked > 0 ? "var(--accent)" : undefined} />
+        <Row label="Blocked / read-backs" value={`${metrics.blocked} blocked · ${metrics.confirms} read-backs`} color={metrics.blocked > 0 ? "var(--accent)" : undefined} />
 
         {/* Taps counter */}
         <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "var(--muted)", margin: "16px 0 6px" }}>Screen taps</div>
         <div style={{ display: "flex", gap: 10 }}>
           <div style={{ flex: 1, background: "var(--surface-2)", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
             <div style={{ fontSize: 26, fontWeight: 800, color: "var(--accent)" }}>0</div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>by voice</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>by voice (Part 5)</div>
           </div>
           <div style={{ flex: 1, background: "var(--surface-2)", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
             <div style={{ fontSize: 26, fontWeight: 800, color: "var(--text)" }}>~{metrics.tapsOldWay}</div>
@@ -102,7 +105,7 @@ export default function DecisionPanel({
           </div>
         </div>
         <div style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", marginTop: 8 }}>
-          ~{metrics.tapsOldWay} taps vs a tap-based app (estimate) — by voice, VOX runs hands-free.
+          ~{metrics.tapsOldWay} taps for the completed actions in a tap-based app (est.) — by voice, VOX needs none.
         </div>
       </div>
     </div>
