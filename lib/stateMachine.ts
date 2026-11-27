@@ -47,6 +47,14 @@ export function decide(order: Order | null, input: IntentInput): Decision {
       return pass("ACCEPTED", "ACCEPT_ORDER", `Order accepted. Head to ${order.pickup_name}.`);
     }
 
+    case "REJECT_ORDER": {
+      if (!order || order.status !== "AVAILABLE")
+        return block("No request to reject.", "There's no ride request to reject right now.");
+      // No state change — the order stays available; the client advances to the next
+      // offer. Logged so the trace shows the decline was a real, validated decision.
+      return { ...base, validation: "PASSED", action: "REJECT_ORDER", feedback: "Request declined. Finding your next ride." };
+    }
+
     case "START_NAVIGATION": {
       if (!order) return block("No active order.", "No order to navigate to.");
       if (order.status === "ACCEPTED" || order.status === "NAVIGATING_PICKUP")

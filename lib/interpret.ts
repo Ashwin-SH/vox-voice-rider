@@ -13,6 +13,9 @@ export interface Interpretation {
 // present the Gemini interpreter (app/api/interpret) does the real understanding.
 // Order matters: more specific intents first.
 const CUES: { intent: IntentType; words: string[] }[] = [
+  { intent: "GO_ONLINE", words: ["go online", "online ho", "start shift", "start working", "duty on", "ready for rides", "i am ready", "i'm ready", "let's go online"] },
+  { intent: "QUERY_EARNINGS", words: ["how much have i earned", "how much did i earn", "how much have i made", "my earnings", "total earnings", "kitna kamaya", "kitne paise kamaye", "kamai", "estu sikthu", "estu duddu banthu", "how much today"] },
+  { intent: "QUERY_DISTANCE", words: ["how far", "far is", "how much distance", "kitna door", "kitni door", "door hai", "eshtu doora", "eshtu dura", "estu dura", "how many km", "how many kilometre", "how many kilometer", "distance to"] },
   { intent: "CALL_CUSTOMER", words: ["call", "phone", "ring", "dial", "baat kar", "customer ko", "grahak", "kare maadi", "karemaadi", "call maadi", "phone karo", "customer ge call"] },
   { intent: "MARK_PICKED_UP", words: ["picked up", "pick up", "pickup", "pick ho", "uthaya", "uthaa liya", "le liya", "parcel liya", "tegond", "tagond", "pick aytu", "got the parcel", "collected parcel"] },
   { intent: "MARK_DELIVERED", words: ["deliver", "delivered", "pahuncha", "pahunchaya", "de diya", "hand over", "handover", "kottu", "kottaytu", "tagandu", "drop kar", "dropped", "delivery done", "deliver aytu"] },
@@ -21,7 +24,9 @@ const CUES: { intent: IntentType; words: string[] }[] = [
   { intent: "NEXT_ORDER", words: ["next order", "next", "agla order", "agla", "mundina", "aage", "another order", "new order"] },
   { intent: "REPORT_HAZARD", words: ["hazard", "traffic", "jam", "road block", "raasta kharab", "pothole", "block hai", "accident ahead"] },
   { intent: "EMERGENCY", words: ["emergency", "help me", "sos", "bachao", "danger", "accident", "madad"] },
-  { intent: "ACCEPT_ORDER", words: ["accept", "le lo", "lelo", "le lenge", "haan le", "swikar", "howdu", "take it", "accept maadi", "accept karo", "order le", "yes take"] },
+  { intent: "REJECT_ORDER", words: ["reject", "decline", "skip", "not this one", "mat lo", "nahi chahiye", "chhod do", "chod do", "pass this", "don't want", "dont want", "reject maadi", "beda bidu", "ignore this"] },
+  { intent: "CANCEL_RIDE", words: ["cancel ride", "cancel the ride", "cancel order", "ride cancel", "cancel maadi", "band karo", "cancel this"] },
+  { intent: "ACCEPT_ORDER", words: ["accept", "le lo", "lelo", "le lenge", "haan le", "swikar", "howdu", "take it", "accept maadi", "accept karo", "order le", "yes take", "take this", "i'll take it"] },
 ];
 
 const YES = ["yes", "yeah", "yep", "haan", "haa", "ok", "okay", "sari", "howdu", "theek", "confirm", "record it", "correct", "right", "ho gaya"];
@@ -95,7 +100,7 @@ export function interpret(transcript: string, ctx: { awaitingConfirm?: boolean }
 // can disambiguate (e.g. after DELIVERED, "collect" means cash, not pickup).
 export function likelyActions(status?: string): IntentType[] {
   switch (status) {
-    case "AVAILABLE": return ["ACCEPT_ORDER"];
+    case "AVAILABLE": return ["ACCEPT_ORDER", "REJECT_ORDER"];
     case "ACCEPTED": return ["START_NAVIGATION", "MARK_PICKED_UP", "CALL_CUSTOMER"];
     case "NAVIGATING_PICKUP": return ["MARK_PICKED_UP", "CALL_CUSTOMER"];
     case "PICKED_UP": return ["START_NAVIGATION", "MARK_DELIVERED", "CALL_CUSTOMER"];

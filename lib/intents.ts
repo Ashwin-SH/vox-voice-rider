@@ -3,16 +3,30 @@ import type { Order, OrderStatus } from "./types";
 // What the rider wants to do. The voice/LLM layer (Part 5) maps free, multilingual
 // speech to one of these; the state machine (this module) decides if it's allowed.
 export type IntentType =
+  | "GO_ONLINE"        // client-handled: rider goes online to receive requests
   | "ACCEPT_ORDER"
+  | "REJECT_ORDER"     // decline the current request
+  | "CANCEL_RIDE"      // client-handled: cancel while a request is being offered
   | "START_NAVIGATION"
   | "CALL_CUSTOMER"
   | "MARK_PICKED_UP"
   | "MARK_DELIVERED"
   | "RECORD_CASH"
   | "NEXT_ORDER"
+  | "QUERY_EARNINGS"   // client-handled: "how much have I earned?"
+  | "QUERY_DISTANCE"   // client-handled: "how far is the drop?"
   | "REPORT_HAZARD"
   | "EMERGENCY"
   | "UNKNOWN";
+
+// Intents answered on the client (no engine state change): going online, and the
+// read-only questions. They never reach the DB engine — the UI responds directly.
+export const CLIENT_INTENTS: ReadonlySet<IntentType> = new Set<IntentType>([
+  "GO_ONLINE",
+  "CANCEL_RIDE",
+  "QUERY_EARNINGS",
+  "QUERY_DISTANCE",
+]);
 
 // The structured input to the engine. riderLat/riderLng are the (simulated) GPS
 // of the rider at command time; amount/confirmed are used by RECORD_CASH.
@@ -24,6 +38,7 @@ export interface IntentInput {
   confirmed?: boolean; // the rider's read-back confirmation for money/critical actions
   riderLat?: number;
   riderLng?: number;
+  orderId?: string;    // target a specific order (the ride the client is acting on); defaults to the focus order
   transcript?: string; // raw recognized text, for the audit trail / panel
 }
 

@@ -7,8 +7,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const INTENTS: IntentType[] = [
-  "ACCEPT_ORDER", "START_NAVIGATION", "MARK_PICKED_UP", "CALL_CUSTOMER",
-  "MARK_DELIVERED", "RECORD_CASH", "NEXT_ORDER", "REPORT_HAZARD", "EMERGENCY", "UNKNOWN",
+  "GO_ONLINE", "ACCEPT_ORDER", "REJECT_ORDER", "CANCEL_RIDE", "START_NAVIGATION", "MARK_PICKED_UP", "CALL_CUSTOMER",
+  "MARK_DELIVERED", "RECORD_CASH", "NEXT_ORDER", "QUERY_EARNINGS", "QUERY_DISTANCE", "REPORT_HAZARD", "EMERGENCY", "UNKNOWN",
 ];
 
 interface Body {
@@ -58,6 +58,7 @@ export async function POST(request: Request) {
 const SYSTEM = `You map an Indian delivery rider's spoken command to ONE intent by MEANING.
 The rider may speak English, Hindi, Kannada, Tamil, or mixed (Hinglish / Kannada-English) — understand intent, not exact words.
 Intents: ${JSON.stringify(INTENTS)}.
+Guidance: GO_ONLINE = the rider wants to start receiving rides ("go online", "start"). ACCEPT_ORDER / REJECT_ORDER = take or decline the current ride request. QUERY_EARNINGS = asking how much they've earned/made. QUERY_DISTANCE = asking how far the pickup or drop is. CANCEL_RIDE = cancel the current request.
 For cash, extract the rupee amount as a number. If the rider is answering a yes/no confirmation, set isYes or isNo.
 Reply with ONLY compact JSON: {"intent":"...","amount":<number>,"isYes":<bool>,"isNo":<bool>}. Omit fields that don't apply. Use UNKNOWN if genuinely unclear.`;
 
