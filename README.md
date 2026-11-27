@@ -52,3 +52,12 @@ Voice → Intent → Context → Validation → Action → Feedback
 The AI is responsible for *understanding*. Our code is responsible for *execution*:
 a deterministic state machine checks task state, GPS geofence, confirmations and
 duplicate actions before anything is recorded. Voice can replace a tap — never the proof.
+
+## API (mock backend)
+
+```bash
+curl localhost:3000/api/health            # {"ok":true,"db":"connected"}
+curl localhost:3000/api/health?strict=1   # 503 if the DB is down (probe mode)
+curl localhost:3000/api/orders            # seeded orders (no customer phone)
+curl localhost:3000/api/orders/current    # the rider's active / next order
+```

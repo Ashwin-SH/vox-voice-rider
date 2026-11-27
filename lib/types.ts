@@ -1,12 +1,15 @@
-// Order lifecycle states — mirror the deterministic state machine (Part 2).
-export type OrderStatus =
-  | "AVAILABLE"          // offered to the rider, not yet accepted
-  | "ACCEPTED"           // rider accepted, heading to pickup
-  | "NAVIGATING_PICKUP"  // en route to pickup
-  | "PICKED_UP"          // parcel in hand, heading to drop
-  | "NAVIGATING_DROP"    // en route to drop
-  | "DELIVERED"          // handed over (geofence-verified)
-  | "PAID";              // cash/settlement recorded — terminal
+// Order lifecycle states — single source of truth for the DB CHECK, request
+// validation and the deterministic state machine (Part 2).
+export const ORDER_STATUSES = [
+  "AVAILABLE",          // offered to the rider, not yet accepted
+  "ACCEPTED",           // rider accepted, heading to pickup
+  "NAVIGATING_PICKUP",  // en route to pickup
+  "PICKED_UP",          // parcel in hand, heading to drop
+  "NAVIGATING_DROP",    // en route to drop
+  "DELIVERED",          // handed over (geofence-verified)
+  "PAID",               // cash/settlement recorded — terminal
+] as const;
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export interface GeoPoint {
   lat: number;

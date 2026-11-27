@@ -1,4 +1,8 @@
 import { Pool, type QueryResult, type QueryResultRow } from "pg";
+import { ORDER_STATUSES } from "./types";
+
+// Rendered into the orders.status CHECK constraint (single source of truth).
+const STATUS_LIST = ORDER_STATUSES.map((x) => `'${x}'`).join(", ");
 
 // A single pooled connection. We DON'T connect at import time, so the app
 // (and its static/keyless screens) boot fine even with no database reachable.
@@ -43,7 +47,7 @@ export async function ensureSchema(): Promise<void> {
         CREATE TABLE IF NOT EXISTS orders (
           id            TEXT PRIMARY KEY,
           rider_id      TEXT REFERENCES riders(id),
-          status        TEXT NOT NULL DEFAULT 'AVAILABLE',
+          status        TEXT NOT NULL DEFAULT 'AVAILABLE' CHECK (status IN (${STATUS_LIST})),
           pickup_name   TEXT NOT NULL,
           pickup_lat    DOUBLE PRECISION NOT NULL,
           pickup_lng    DOUBLE PRECISION NOT NULL,
@@ -65,6 +69,7 @@ export async function ensureSchema(): Promise<void> {
           method      TEXT NOT NULL DEFAULT 'CASH',
           recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
+        CREATE INDEX IF NOT EXISTS idx_txn_order ON transactions(order_id);
         CREATE TABLE IF NOT EXISTS task_events (
           id          BIGSERIAL PRIMARY KEY,
           order_id    TEXT,
@@ -128,6 +133,7 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   text: string,
   params: unknown[] = []
 ): Promise<QueryResult<T>> {
+  if (!isDbConfigured()) throw new Error("DATABASE_URL is not configured");
   await ensureSchema();
   return getPool().query<T>(text, params as unknown[]);
 }
