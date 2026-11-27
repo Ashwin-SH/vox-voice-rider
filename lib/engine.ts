@@ -1,74 +1,111 @@
-import { query, withTransaction } from "./db";
+import { query, withTransaction, ORDER_COLS_FULL } from "./db";
 import { decide } from "./stateMachine";
 import type { Decision, IntentInput } from "./intents";
 import type { Order } from "./types";
 import { randomUUID } from "node:crypto";
 
 const RIDER_ID = "rider_ravi";
+const MAX_TRANSCRIPT = 500;
 
 // The rider's single point of focus: their active order, else the next available.
 async function loadFocusOrder(): Promise<Order | null> {
   const active = await query<Order>(
-    `SELECT * FROM orders WHERE status NOT IN ('AVAILABLE','PAID') ORDER BY created_at ASC LIMIT 1`
+    `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status NOT IN ('AVAILABLE','PAID') ORDER BY created_at ASC LIMIT 1`
   );
   if (active.rows[0]) return active.rows[0];
   const next = await query<Order>(
-    `SELECT * FROM orders WHERE status = 'AVAILABLE' ORDER BY created_at ASC LIMIT 1`
+    `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status = 'AVAILABLE' ORDER BY created_at ASC LIMIT 1`
   );
   return next.rows[0] ?? null;
 }
 
-export interface IntentResult {
-  decision: Decision;
-  order: Order | null; // the focus order after the action (for UI refresh)
+// Audit payload without leaking the phone (from a CALL side effect) or storing an
+// unbounded transcript blob.
+function auditPayload(decision: Decision, input: IntentInput): string {
+  const safeDecision: Decision = decision.sideEffect?.value
+    ? { ...decision, sideEffect: { ...decision.sideEffect, value: "[redacted]" } }
+    : decision;
+  const safeInput: IntentInput =
+    typeof input.transcript === "string" && input.transcript.length > MAX_TRANSCRIPT
+      ? { ...input, transcript: input.transcript.slice(0, MAX_TRANSCRIPT) }
+      : input;
+  return JSON.stringify({ decision: safeDecision, input: safeInput });
 }
 
-// Load context → decide (pure) → apply the allowed transition → audit. The pure
-// decision is never trusted to mutate anything; only PASSED decisions write.
+async function audit(orderId: string | null, decision: Decision, input: IntentInput): Promise<void> {
+  await query(`INSERT INTO task_events (order_id, event_type, payload) VALUES ($1, $2, $3::jsonb)`, [
+    orderId,
+    decision.action,
+    auditPayload(decision, input),
+  ]);
+}
+
+export interface IntentResult {
+  decision: Decision;
+  order: Order | null; // focus order after the action (customer_phone stripped by the route)
+}
+
+// Load context → decide (pure) → apply the allowed transition. The pure decision
+// never mutates anything itself; only PASSED decisions write, and every write is a
+// compare-and-swap so concurrent duplicates cannot both succeed.
 export async function runIntent(input: IntentInput): Promise<IntentResult> {
   const order = await loadFocusOrder();
-  const decision = decide(order, input);
+  let decision = decide(order, input);
   let focus = order;
 
-  if (decision.validation === "PASSED" && order) {
-    if (decision.action === "RECORD_CASH" && typeof decision.amount === "number") {
-      // Mark PAID and record the cash in ONE transaction: never a PAID order
-      // without its matching transaction row (or vice-versa).
-      const amount = decision.amount;
-      focus = await withTransaction(async (c) => {
-        const upd = await c.query<Order>(
-          `UPDATE orders SET status = $1, rider_id = $2 WHERE id = $3 RETURNING *`,
-          [decision.statusAfter ?? "PAID", RIDER_ID, order.id]
-        );
-        await c.query(
-          `INSERT INTO transactions (id, order_id, amount, method) VALUES ($1, $2, $3, 'CASH')`,
-          [randomUUID(), order.id, amount]
-        );
-        return upd.rows[0] ?? order;
-      });
-    } else if (decision.statusAfter && decision.statusAfter !== order.status) {
-      const upd = await query<Order>(
-        `UPDATE orders SET status = $1, rider_id = $2 WHERE id = $3 RETURNING *`,
-        [decision.statusAfter, RIDER_ID, order.id]
+  // A state-changing, allowed action: do the UPDATE, any cash row, and the audit
+  // in ONE transaction, guarded on the status decide() actually saw.
+  if (decision.validation === "PASSED" && order && decision.statusAfter && decision.statusAfter !== order.status) {
+    const isCash = decision.action === "RECORD_CASH";
+    const amount = decision.amount;
+    const updated = await withTransaction(async (c) => {
+      const upd = await c.query<Order>(
+        `UPDATE orders SET status = $1, rider_id = $2 WHERE id = $3 AND status = $4 RETURNING ${ORDER_COLS_FULL}`,
+        [decision.statusAfter, RIDER_ID, order.id, order.status]
       );
-      focus = upd.rows[0] ?? order;
+      if (upd.rowCount === 0) return null; // lost a race: another request already advanced this order
+      if (isCash && typeof amount === "number") {
+        await c.query(`INSERT INTO transactions (id, order_id, amount, method) VALUES ($1, $2, $3, 'CASH')`, [
+          randomUUID(),
+          order.id,
+          amount,
+        ]);
+      }
+      await c.query(`INSERT INTO task_events (order_id, event_type, payload) VALUES ($1, $2, $3::jsonb)`, [
+        order.id,
+        decision.action,
+        auditPayload(decision, input),
+      ]);
+      return upd.rows[0];
+    });
+
+    if (updated === null) {
+      decision = {
+        ...decision,
+        validation: "BLOCKED",
+        action: "BLOCKED",
+        statusAfter: null,
+        reason: "Order already advanced by a concurrent action.",
+        feedback: "That was already done.",
+      };
+      focus = await loadFocusOrder();
+      await audit(order.id, decision, input);
+      return { decision, order: focus };
     }
+    return { decision, order: updated };
   }
 
-  // "Next order" advances focus to the next available order.
+  // "Next order" moves focus to a DIFFERENT available order (never the current one).
   if (decision.validation === "PASSED" && decision.action === "NEXT_ORDER") {
     const next = await query<Order>(
-      `SELECT * FROM orders WHERE status = 'AVAILABLE' ORDER BY created_at ASC LIMIT 1`
+      `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status = 'AVAILABLE' AND id <> $1 ORDER BY created_at ASC LIMIT 1`,
+      [order?.id ?? ""]
     );
     focus = next.rows[0] ?? null;
-    decision.orderId = focus?.id ?? null;
+    decision = { ...decision, orderId: focus?.id ?? null };
   }
 
-  // Append-only audit trail — powers the judge decision panel + metrics (Part 4).
-  await query(
-    `INSERT INTO task_events (order_id, event_type, payload) VALUES ($1, $2, $3::jsonb)`,
-    [order?.id ?? focus?.id ?? null, decision.action, JSON.stringify({ decision, input })]
-  );
-
+  // Non-state-change paths (BLOCKED / CALL / NOOP / NEXT_ORDER / hazard / emergency): audit only.
+  await audit(order?.id ?? focus?.id ?? null, decision, input);
   return { decision, order: focus };
 }

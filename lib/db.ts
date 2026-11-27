@@ -4,6 +4,13 @@ import { ORDER_STATUSES } from "./types";
 // Rendered into the orders.status CHECK constraint (single source of truth).
 const STATUS_LIST = ORDER_STATUSES.map((x) => `'${x}'`).join(", ");
 
+// Column lists shared by the routes and the engine. PUBLIC omits customer_phone
+// (never returned to clients); FULL includes it (the call feature needs it, but
+// the API layer strips it before responding).
+export const ORDER_COLS_PUBLIC =
+  "id, rider_id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, customer_name, created_at";
+export const ORDER_COLS_FULL = `${ORDER_COLS_PUBLIC}, customer_phone`;
+
 // A single pooled connection. We DON'T connect at import time, so the app
 // (and its static/keyless screens) boot fine even with no database reachable.
 let pool: Pool | null = null;
@@ -103,9 +110,9 @@ export async function ensureSchema(): Promise<void> {
 async function seed(p: Pool): Promise<void> {
   // Real-ish Bengaluru coordinates so the geofence math (Part 2) is meaningful.
   const orders: Array<[string, string, number, number, string, number, number, number, number, string, string]> = [
-    ["ord_1001", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 6, 62, "Priya", "+91 90000 11111"],
-    ["ord_1002", "Koramangala", 12.9352, 77.6245, "HSR Layout", 12.9116, 77.6389, 5, 48, "Arjun", "+91 90000 22222"],
-    ["ord_1003", "Jayanagar", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 4, 44, "Sana", "+91 90000 33333"],
+    ["ord_1001", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 1.3, 62, "Priya", "+91 90000 11111"],
+    ["ord_1002", "Koramangala", 12.9352, 77.6245, "HSR Layout", 12.9116, 77.6389, 3.0, 48, "Arjun", "+91 90000 22222"],
+    ["ord_1003", "Jayanagar", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 2.0, 44, "Sana", "+91 90000 33333"],
   ];
   // One transaction: either the whole seed lands or none of it does, so a retry
   // never sees a partial table and skips the rest.

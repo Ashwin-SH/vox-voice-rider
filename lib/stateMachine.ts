@@ -20,8 +20,10 @@ export function decide(order: Order | null, input: IntentInput): Decision {
   };
 
   // Low-confidence recognitions never execute a command — VOX asks again rather
-  // than guess. EMERGENCY is exempt: for a rider-safety trigger, a false alarm is
-  // safer than a missed real emergency.
+  // than guess. A MISSING confidence is intentionally trusted: typed/tap commands
+  // (the keyless fallback) are certain by construction, so the floor applies only
+  // to the voice path, which always sends a confidence. EMERGENCY is exempt: for a
+  // rider-safety trigger, a false alarm is safer than a missed real emergency.
   if (
     input.intent !== "EMERGENCY" &&
     typeof input.confidence === "number" &&
@@ -95,7 +97,7 @@ export function decide(order: Order | null, input: IntentInput): Decision {
           `You're still ${distanceM} metres away. I haven't marked this delivered.`,
           { geo }
         );
-      return pass("DELIVERED", "MARK_DELIVERED", `Delivered. Did you collect the cash?`, { geo });
+      return pass("DELIVERED", "MARK_DELIVERED", "Delivered. Did you collect the cash?", { geo });
     }
 
     case "RECORD_CASH": {
@@ -110,6 +112,11 @@ export function decide(order: Order | null, input: IntentInput): Decision {
         input.amount > MAX_CASH
       )
         return { ...base, validation: "CONFIRM_REQUIRED", action: "ASK_AMOUNT", feedback: "How much did you collect?" };
+      // The collected cash must equal the order's COD total: a misheard
+      // "two thousand" on a ₹62 order must never record. Mismatch → re-ask.
+      if (input.amount !== order.earnings)
+        return { ...base, validation: "CONFIRM_REQUIRED", action: "CONFIRM_AMOUNT", amount: input.amount,
+          feedback: `I heard ₹${input.amount}, but this order is ₹${order.earnings}. Please say the correct amount.` };
       if (input.confirmed !== true)
         return { ...base, validation: "CONFIRM_REQUIRED", action: "CONFIRM_AMOUNT", amount: input.amount,
           feedback: `₹${input.amount} collected — say yes to confirm.` };

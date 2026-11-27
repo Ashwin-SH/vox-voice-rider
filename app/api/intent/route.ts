@@ -3,6 +3,7 @@ import { jsonError } from "@/lib/http";
 import { isDbConfigured } from "@/lib/db";
 import { runIntent } from "@/lib/engine";
 import type { IntentInput } from "@/lib/intents";
+import type { Order } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,8 +24,17 @@ export async function POST(request: Request) {
   const t0 = Date.now();
   try {
     const result = await runIntent(body);
-    return NextResponse.json({ ...result, latencyMs: Date.now() - t0 });
+    // Never return customer_phone in the order; the dial number reaches the client
+    // only via the CALL decision's sideEffect when the rider calls.
+    const order = result.order ? stripPhone(result.order) : null;
+    return NextResponse.json({ decision: result.decision, order, latencyMs: Date.now() - t0 });
   } catch (e) {
     return jsonError("Engine error", 503, e);
   }
+}
+
+function stripPhone(o: Order): Omit<Order, "customer_phone"> {
+  const { customer_phone: _omit, ...rest } = o;
+  void _omit;
+  return rest;
 }

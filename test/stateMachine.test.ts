@@ -66,11 +66,17 @@ test("RECORD_CASH with amount but no confirmation asks to confirm (read-back)", 
   assert.match(d.feedback, /320/);
 });
 
-test("RECORD_CASH confirmed records payment → PAID", () => {
-  const d = decide(order("DELIVERED"), i({ intent: "RECORD_CASH", amount: 320, confirmed: true }));
+test("RECORD_CASH confirmed, amount matches order total → PAID", () => {
+  const d = decide(order("DELIVERED"), i({ intent: "RECORD_CASH", amount: 62, confirmed: true }));
   assert.equal(d.validation, "PASSED");
   assert.equal(d.statusAfter, "PAID");
-  assert.equal(d.amount, 320);
+  assert.equal(d.amount, 62);
+});
+
+test("RECORD_CASH rejects an amount that doesn't match the order total", () => {
+  const d = decide(order("DELIVERED"), i({ intent: "RECORD_CASH", amount: 2000, confirmed: true }));
+  assert.notEqual(d.validation, "PASSED");
+  assert.match(d.feedback, /62/);
 });
 
 test("RECORD_CASH before delivery is blocked", () => {
