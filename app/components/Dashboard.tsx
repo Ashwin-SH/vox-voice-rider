@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Order, OrderStatus } from "@/lib/types";
-import type { IntentType } from "@/lib/intents";
+import type { Decision, IntentType } from "@/lib/intents";
 import VoxButton, { type VoiceState } from "./VoxButton";
+import DecisionPanel, { type Metrics } from "./DecisionPanel";
 
 // Lifecycle shown as a stepper. NAVIGATING_PICKUP sits at "Navigating" (before
 // pickup); NAVIGATING_DROP maps to "Picked up" so the bar never regresses when
@@ -34,6 +35,25 @@ const COMMANDS: { intent: IntentType; label: string; kind?: "geo" | "cash" }[] =
   { intent: "NEXT_ORDER", label: "Next" },
 ];
 
+// Rough screen-tap cost each command would take in a normal rider app — used
+// only for the "taps saved" counter in the judge panel.
+const TAP_COST: Record<string, number> = {
+  ACCEPT_ORDER: 2,
+  START_NAVIGATION: 2,
+  MARK_PICKED_UP: 2,
+  CALL_CUSTOMER: 3,
+  MARK_DELIVERED: 2,
+  RECORD_CASH: 4,
+  NEXT_ORDER: 1,
+  REPORT_HAZARD: 3,
+  EMERGENCY: 3,
+};
+interface HistEntry {
+  latencyMs: number;
+  validation?: string;
+  intent: string;
+}
+
 interface Props {
   hasKey: boolean;
   voiceProvider: string;
@@ -47,6 +67,10 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ intent: IntentType; amount: number } | null>(null);
+  const [lastDecision, setLastDecision] = useState<Decision | null>(null);
+  const [history, setHistory] = useState<HistEntry[]>([]);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [atDrop, setAtDrop] = useState(true); // simulated rider location for the geofence demo
   const busyRef = useRef(false); // synchronous guard — airtight against a double tap
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -109,11 +133,12 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
       if (resetTimer.current) clearTimeout(resetTimer.current);
       setVoice("processing");
       const body: Record<string, unknown> = { intent };
-      // Demo stub: simulate the rider standing at the drop so the geofence passes.
-      // (Part 6's demo controls let you place the rider "too far" to show the block.)
+      // Simulated rider location: "At drop" passes the geofence; "Far away" sends
+      // the pickup coords (~1.3 km off) so the delivery is blocked — this is what
+      // lets the demo show VOX refuse an out-of-zone delivery live in the panel.
       if (kind === "geo" && order) {
-        body.riderLat = order.drop_lat;
-        body.riderLng = order.drop_lng;
+        body.riderLat = atDrop ? order.drop_lat : order.pickup_lat;
+        body.riderLng = atDrop ? order.drop_lng : order.pickup_lng;
       }
       // Cash = the customer's COD total (not the rider's payout). The first tap
       // sends the amount WITHOUT `confirmed`, so the engine asks for a read-back;
@@ -135,7 +160,12 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
           flash("blocked", 1800);
           return;
         }
-        const dec = d.decision;
+        const dec = d.decision as Decision | undefined;
+        // Record the real decision + measured latency for the judge panel/metrics.
+        setLastDecision(dec ?? null);
+        setHistory((h) =>
+          [...h, { latencyMs: typeof d.latencyMs === "number" ? d.latencyMs : 0, validation: dec?.validation, intent }].slice(-50)
+        );
         setFeedback(dec?.feedback ?? "");
         if (dec?.validation === "CONFIRM_REQUIRED") {
           // Read-back (or a mismatch the engine flagged). Always confirm the
@@ -161,7 +191,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         setBusy(false);
       }
     },
-    [order]
+    [order, atDrop]
   );
 
   // Rider answered the read-back → record with the echoed amount + confirmation.
@@ -181,8 +211,20 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
   const curStep = stepIndex(order?.status ?? null);
   const onTrip = order && order.status !== "AVAILABLE" && order.status !== "PAID";
 
+  const executed = history.filter((h) => h.validation === "PASSED");
+  const metrics: Metrics = {
+    total: history.length,
+    executed: executed.length,
+    blocked: history.filter((h) => h.validation === "BLOCKED").length,
+    confirms: history.filter((h) => h.validation === "CONFIRM_REQUIRED").length,
+    lastLatency: history.length ? history[history.length - 1].latencyMs : null,
+    avgLatency: history.length ? Math.round(history.reduce((s, h) => s + h.latencyMs, 0) / history.length) : null,
+    // Taps the COMPLETED actions would have cost in a tap-based app (estimate).
+    tapsOldWay: executed.reduce((s, h) => s + (TAP_COST[h.intent] ?? 2), 0),
+  };
+
   return (
-    <main style={{ maxWidth: 480, margin: "0 auto", minHeight: "100dvh", padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+    <main style={{ maxWidth: 480, margin: "0 auto", minHeight: "100dvh", padding: 16, paddingBottom: 72, display: "flex", flexDirection: "column", gap: 14 }}>
       {/* Top bar */}
       <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -279,6 +321,26 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         </section>
       )}
 
+      {/* Simulated rider location — drives whether "Deliver" passes the geofence.
+          Lets the demo show VOX refusing an out-of-zone delivery. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+        <span style={{ color: "var(--muted)" }}>📍 Rider location:</span>
+        <button
+          onClick={() => setAtDrop(true)}
+          aria-pressed={atDrop}
+          style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${atDrop ? "var(--accent)" : "var(--border)"}`, background: atDrop ? "rgba(22,212,168,0.14)" : "var(--surface-2)", color: atDrop ? "var(--accent)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+        >
+          At drop
+        </button>
+        <button
+          onClick={() => setAtDrop(false)}
+          aria-pressed={!atDrop}
+          style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${!atDrop ? "var(--warn)" : "var(--border)"}`, background: !atDrop ? "rgba(245,166,35,0.14)" : "var(--surface-2)", color: !atDrop ? "var(--warn)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+        >
+          Far away
+        </button>
+      </div>
+
       {/* Command chips (typed-command fallback; voice drives these in Part 5) */}
       <section style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
         {COMMANDS.map((c) => (
@@ -300,6 +362,16 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
           SOS
         </button>
       </section>
+
+      {/* Judge-panel toggle (discreet) + the decision/metrics overlay */}
+      <button
+        onClick={() => setPanelOpen(true)}
+        aria-label="Open judge decision panel"
+        style={{ position: "fixed", right: 14, bottom: 14, zIndex: 40, background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 999, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,0.4)" }}
+      >
+        📊 Panel{history.length ? ` · ~${metrics.tapsOldWay} saved` : ""}
+      </button>
+      <DecisionPanel decision={lastDecision} metrics={metrics} open={panelOpen} onClose={() => setPanelOpen(false)} />
     </main>
   );
 }
