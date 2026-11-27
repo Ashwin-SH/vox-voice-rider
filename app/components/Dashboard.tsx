@@ -138,9 +138,12 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         const dec = d.decision;
         setFeedback(dec?.feedback ?? "");
         if (dec?.validation === "CONFIRM_REQUIRED") {
-          // Engine wants a read-back — show the prompt and wait for the rider.
-          setPendingConfirm({ intent, amount: dec.amount ?? order?.cod_amount ?? 0 });
-          flash("confirm", 6000);
+          // Read-back (or a mismatch the engine flagged). Always confirm the
+          // order's correct COD amount — never the possibly-misheard echoed value,
+          // which would loop forever against the engine's mismatch guard.
+          setPendingConfirm({ intent, amount: order?.cod_amount ?? 0 });
+          if (resetTimer.current) clearTimeout(resetTimer.current);
+          setVoice("confirm"); // persists until Yes/No — no auto-reset timer
           return;
         }
         setPendingConfirm(null);
