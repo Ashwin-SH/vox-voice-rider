@@ -19,10 +19,13 @@ export async function POST(request: Request) {
   if (!(file instanceof Blob)) return jsonError("Missing audio 'file'", 400);
   try {
     const fd = new FormData();
-    // Preserve the client's filename/extension so Sarvam sees the right container
-    // (Chrome/Firefox send webm, Safari sends mp4).
+    // Preserve the filename/extension (Chrome/Firefox→webm, Safari→mp4) but STRIP
+    // the codec parameter: Sarvam allows "audio/webm" yet rejects the browser's
+    // "audio/webm;codecs=opus", so re-wrap the bytes with the bare base type.
     const name = file instanceof File && file.name ? file.name : "audio.webm";
-    fd.append("file", file, name);
+    const baseType = (file.type || "audio/webm").split(";")[0];
+    const clean = new Blob([await file.arrayBuffer()], { type: baseType });
+    fd.append("file", clean, name);
     fd.append("model", "saarika:v2.5");
     const res = await fetch("https://api.sarvam.ai/speech-to-text", {
       method: "POST",
