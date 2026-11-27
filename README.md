@@ -15,6 +15,9 @@ docker compose up --build
 
 Then open **http://localhost:3000**.
 
+> If port 3000 is busy on your machine, start it on another:
+> `VOX_WEB_PORT=3200 docker compose up --build` and open that port.
+
 The app **starts and shows its main screen with no keys at all.** In this keyless mode
 it uses the browser's built-in Web Speech API for voice.
 
