@@ -36,7 +36,8 @@ export interface Order {
   drop_lat: number;
   drop_lng: number;
   distance_km: number;
-  earnings: number;        // rupees
+  earnings: number;        // rupees — the rider's payout/fee
+  cod_amount: number;      // rupees — cash the customer hands over (COD order value)
   customer_name: string;
   customer_phone: string;
   created_at: string;
@@ -55,7 +56,7 @@ export interface Transaction {
 export interface TaskEvent {
   id: string;
   order_id: string | null;
-  event_type: string;      // e.g. "ACCEPT", "PICKUP", "DELIVER_BLOCKED", "CASH_RECORDED"
+  event_type: string;      // the decision's action, e.g. "ACCEPT_ORDER", "MARK_PICKED_UP", "BLOCKED", "RECORD_CASH"
   payload: Record<string, unknown>;
   created_at: string;
 }

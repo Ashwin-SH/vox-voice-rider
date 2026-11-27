@@ -1,8 +1,16 @@
-import { Pool, type QueryResult, type QueryResultRow } from "pg";
+import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import { ORDER_STATUSES } from "./types";
 
 // Rendered into the orders.status CHECK constraint (single source of truth).
 const STATUS_LIST = ORDER_STATUSES.map((x) => `'${x}'`).join(", ");
+
+// Column lists shared by the routes and the engine. PUBLIC omits customer_phone
+// (never returned to clients); FULL includes it (the call feature needs it, but
+// responses either use PUBLIC or strip it, so it reaches a client only via the
+// CALL side effect).
+export const ORDER_COLS_PUBLIC =
+  "id, rider_id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, cod_amount, customer_name, created_at";
+export const ORDER_COLS_FULL = `${ORDER_COLS_PUBLIC}, customer_phone`;
 
 // A single pooled connection. We DON'T connect at import time, so the app
 // (and its static/keyless screens) boot fine even with no database reachable.
@@ -56,6 +64,7 @@ export async function ensureSchema(): Promise<void> {
           drop_lng      DOUBLE PRECISION NOT NULL,
           distance_km   DOUBLE PRECISION NOT NULL,
           earnings      INTEGER NOT NULL,
+          cod_amount    INTEGER NOT NULL DEFAULT 0,
           customer_name TEXT NOT NULL,
           customer_phone TEXT NOT NULL,
           created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -78,6 +87,16 @@ export async function ensureSchema(): Promise<void> {
           created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS idx_events_order ON task_events(order_id);
+      `);
+      // Idempotent migrations for PRE-EXISTING volumes: CREATE TABLE IF NOT EXISTS
+      // won't add a new column or constraint to a table that already exists.
+      await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cod_amount INTEGER NOT NULL DEFAULT 0`);
+      // Backfill the seed orders' COD on an old volume (seed won't re-run once the
+      // table is non-empty); only touches rows still at the 0 default.
+      await p.query(`
+        UPDATE orders SET cod_amount = v.cod
+        FROM (VALUES ('ord_1001', 320), ('ord_1002', 250), ('ord_1003', 180)) AS v(id, cod)
+        WHERE orders.id = v.id AND orders.cod_amount = 0
       `);
       // Named status constraint applied idempotently — CREATE TABLE IF NOT EXISTS
       // won't add a CHECK to a table from an existing volume, so enforce it here.
@@ -102,10 +121,10 @@ export async function ensureSchema(): Promise<void> {
 
 async function seed(p: Pool): Promise<void> {
   // Real-ish Bengaluru coordinates so the geofence math (Part 2) is meaningful.
-  const orders: Array<[string, string, number, number, string, number, number, number, number, string, string]> = [
-    ["ord_1001", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 6, 62, "Priya", "+91 90000 11111"],
-    ["ord_1002", "Koramangala", 12.9352, 77.6245, "HSR Layout", 12.9116, 77.6389, 5, 48, "Arjun", "+91 90000 22222"],
-    ["ord_1003", "Jayanagar", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 4, 44, "Sana", "+91 90000 33333"],
+  const orders: Array<[string, string, number, number, string, number, number, number, number, number, string, string]> = [
+    ["ord_1001", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 1.3, 62, 320, "Priya", "+91 90000 11111"],
+    ["ord_1002", "Koramangala", 12.9352, 77.6245, "HSR Layout", 12.9116, 77.6389, 3.0, 48, 250, "Arjun", "+91 90000 22222"],
+    ["ord_1003", "Jayanagar", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 2.0, 44, 180, "Sana", "+91 90000 33333"],
   ];
   // One transaction: either the whole seed lands or none of it does, so a retry
   // never sees a partial table and skips the rest.
@@ -120,8 +139,8 @@ async function seed(p: Pool): Promise<void> {
     for (const o of orders) {
       await client.query(
         `INSERT INTO orders
-          (id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, customer_name, customer_phone)
-         VALUES ($1,'AVAILABLE',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          (id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, cod_amount, customer_name, customer_phone)
+         VALUES ($1,'AVAILABLE',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          ON CONFLICT (id) DO NOTHING`,
         o
       );
@@ -143,4 +162,25 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   if (!isDbConfigured()) throw new Error("DATABASE_URL is not configured");
   await ensureSchema();
   return getPool().query<T>(text, params as unknown[]);
+}
+
+// Run several statements atomically on one client. Used where a multi-write must
+// be all-or-nothing (e.g. mark an order PAID *and* record its cash together).
+export async function withTransaction<T>(
+  fn: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  if (!isDbConfigured()) throw new Error("DATABASE_URL is not configured");
+  await ensureSchema();
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
