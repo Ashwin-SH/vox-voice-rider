@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Order, OrderStatus } from "@/lib/types";
-import type { Decision, IntentType } from "@/lib/intents";
+import { CONFIDENCE_FLOOR, type Decision, type IntentType } from "@/lib/intents";
 import VoxButton, { type VoiceState } from "./VoxButton";
 import DecisionPanel, { type Metrics } from "./DecisionPanel";
+import { useVoice } from "./useVoice";
 
 // Lifecycle shown as a stepper. NAVIGATING_PICKUP sits at "Navigating" (before
 // pickup); NAVIGATING_DROP maps to "Picked up" so the bar never regresses when
@@ -55,11 +56,12 @@ interface HistEntry {
 }
 
 interface Props {
-  hasKey: boolean;
+  hasGemini: boolean;
+  hasSarvam: boolean;
   voiceProvider: string;
 }
 
-export default function Dashboard({ hasKey, voiceProvider }: Props) {
+export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props) {
   const [order, setOrder] = useState<Order | null>(null);
   const [voice, setVoice] = useState<VoiceState>("idle");
   const [feedback, setFeedback] = useState<string>("Tap VOX or a command to begin.");
@@ -71,7 +73,10 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
   const [history, setHistory] = useState<HistEntry[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
   const [atDrop, setAtDrop] = useState(true); // simulated rider location for the geofence demo
+  const [voiceLang, setVoiceLang] = useState("en-IN");
+  const speech = useVoice();
   const busyRef = useRef(false); // synchronous guard — airtight against a double tap
+  const voiceActiveRef = useRef(false); // same, for the voice listen/interpret phase
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -126,13 +131,19 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
   };
 
   const send = useCallback(
-    async (intent: IntentType, kind?: "geo" | "cash", confirm?: { amount: number }) => {
-      if (busyRef.current) return;
+    async (
+      intent: IntentType,
+      kind?: "geo" | "cash",
+      opts?: { amount?: number; confirmed?: boolean; confidence?: number; transcript?: string }
+    ): Promise<{ validation?: string; feedback?: string } | undefined> => {
+      if (busyRef.current) return undefined;
       busyRef.current = true;
       setBusy(true);
       if (resetTimer.current) clearTimeout(resetTimer.current);
       setVoice("processing");
       const body: Record<string, unknown> = { intent };
+      if (typeof opts?.confidence === "number") body.confidence = opts.confidence;
+      if (opts?.transcript) body.transcript = opts.transcript;
       // Simulated rider location: "At drop" passes the geofence; "Far away" sends
       // the pickup coords (~1.3 km off) so the delivery is blocked — this is what
       // lets the demo show VOX refuse an out-of-zone delivery live in the panel.
@@ -145,8 +156,8 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
       // `confirmed` is supplied only after the rider agrees. Part 5's voice reuses
       // this same path, so the read-back stays real for speech.
       if (kind === "cash" && order) {
-        body.amount = confirm?.amount ?? order.cod_amount;
-        if (confirm) body.confirmed = true;
+        body.amount = opts?.amount ?? order.cod_amount;
+        if (opts?.confirmed) body.confirmed = true;
       }
       try {
         const r = await fetch("/api/intent", {
@@ -158,7 +169,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         if (!r.ok) {
           setFeedback(d.error ?? "Something went wrong.");
           flash("blocked", 1800);
-          return;
+          return { feedback: d.error ?? "Something went wrong." };
         }
         const dec = d.decision as Decision | undefined;
         // Record the real decision + measured latency for the judge panel/metrics.
@@ -174,7 +185,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
           setPendingConfirm({ intent, amount: order?.cod_amount ?? 0 });
           if (resetTimer.current) clearTimeout(resetTimer.current);
           setVoice("confirm"); // persists until Yes/No — no auto-reset timer
-          return;
+          return { validation: "CONFIRM_REQUIRED", feedback: dec?.feedback };
         }
         setPendingConfirm(null);
         setOrder(d.order ?? null);
@@ -183,9 +194,11 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
           window.location.href = `tel:${String(dec.sideEffect.value).replace(/[^+\d]/g, "")}`;
         }
         flash(dec?.validation === "BLOCKED" ? "blocked" : "speaking", 1700);
+        return { validation: dec?.validation, feedback: dec?.feedback };
       } catch {
         setFeedback("Network error — try again.");
         flash("blocked", 1800);
+        return { feedback: "Network error — try again." };
       } finally {
         busyRef.current = false;
         setBusy(false);
@@ -195,11 +208,11 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
   );
 
   // Rider answered the read-back → record with the echoed amount + confirmation.
-  const confirmCash = useCallback(() => {
-    if (!pendingConfirm) return;
+  const confirmCash = useCallback(async () => {
+    if (!pendingConfirm) return undefined;
     const p = pendingConfirm;
     setPendingConfirm(null);
-    void send(p.intent, "cash", { amount: p.amount });
+    return send(p.intent, "cash", { amount: p.amount, confirmed: true });
   }, [pendingConfirm, send]);
 
   const cancelConfirm = useCallback(() => {
@@ -207,6 +220,105 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
     setFeedback("Cancelled.");
     setVoice("idle");
   }, []);
+
+  // Push-to-talk: listen → interpret (server; Gemini when a key is set, rules
+  // otherwise) → run it through the same engine as the chips → speak the reply.
+  const handleVoice = useCallback(async () => {
+    // A second tap while listening ends the recording early (Sarvam path).
+    if (voice === "listening") {
+      if (hasSarvam) speech.stopRecording();
+      return;
+    }
+    // Synchronous guard against a double-tap in one tick (voice is React state,
+    // so two taps can both pass the check above). Same pattern as send()'s busyRef.
+    if (voice === "processing" || busyRef.current || voiceActiveRef.current) return;
+    // Sarvam uses the mic recorder (not Web Speech), so only require Web Speech
+    // support on the keyless path.
+    if (!hasSarvam && !speech.isSupported) {
+      setFeedback("Voice isn't available in this browser — use the commands below.");
+      flash("blocked", 1800);
+      return;
+    }
+    voiceActiveRef.current = true;
+    try {
+    // Reply language: default to the picker, but switch to whatever Sarvam
+    // detected the rider actually spoke (so Kannada in → Kannada out).
+    let replyLang = voiceLang;
+    const sp = (t: string) => (hasSarvam ? speech.speakSarvam(t, replyLang) : speech.speak(t, voiceLang));
+
+    let heard: { transcript: string; confidence: number; language?: string };
+    try {
+      setVoice("listening");
+      heard = hasSarvam ? await speech.listenSarvam() : await speech.listen(voiceLang);
+    } catch {
+      setFeedback("Didn't hear anything — tap VOX and speak.");
+      setVoice("idle");
+      return;
+    }
+    if (heard.language) replyLang = heard.language;
+    if (!heard.transcript.trim()) {
+      setFeedback("I didn't catch that — say it again.");
+      void sp("I didn't catch that. Please say it again.");
+      flash("blocked", 1500);
+      return;
+    }
+    setVoice("processing");
+    setFeedback(`“${heard.transcript}”`);
+
+    let r: { intent?: string; amount?: number; isYes?: boolean; isNo?: boolean };
+    try {
+      const resp = await fetch("/api/interpret", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: heard.transcript, awaitingConfirm: !!pendingConfirm, status: order?.status }),
+      });
+      r = await resp.json();
+    } catch {
+      setFeedback("Couldn't understand — try again.");
+      void sp("Say that again, please.");
+      flash("blocked", 1600);
+      return;
+    }
+
+    // Answering a read-back ("yes" / "haan" / "no").
+    if (pendingConfirm) {
+      if (r.isNo) {
+        cancelConfirm();
+        void sp("Cancelled.");
+        return;
+      }
+      if (r.isYes) {
+        const res = await confirmCash();
+        void sp(res?.feedback ?? "Recorded.");
+        return;
+      }
+      // Neither yes nor no — don't run a new command mid-confirmation; re-ask.
+      setFeedback("Please say yes or no to confirm.");
+      void sp("Please say yes or no to confirm.");
+      setVoice("confirm");
+      return;
+    }
+
+    if (!r.intent || r.intent === "UNKNOWN" || heard.confidence < CONFIDENCE_FLOOR) {
+      setFeedback("I didn't catch that — say it again.");
+      void sp("I didn't catch that. Please say it again.");
+      flash("blocked", 1600);
+      return;
+    }
+
+    const intent = r.intent as IntentType;
+    const kind = intent === "MARK_DELIVERED" ? "geo" : intent === "RECORD_CASH" ? "cash" : undefined;
+    const opts: { amount?: number; confidence?: number; transcript?: string } = {
+      confidence: heard.confidence,
+      transcript: heard.transcript,
+    };
+    if (intent === "RECORD_CASH" && typeof r.amount === "number") opts.amount = r.amount;
+    const res = await send(intent, kind, opts);
+    void sp(res?.feedback ?? "");
+    } finally {
+      voiceActiveRef.current = false;
+    }
+  }, [voice, hasSarvam, speech, voiceLang, pendingConfirm, order, send, confirmCash, cancelConfirm]);
 
   const curStep = stepIndex(order?.status ?? null);
   const onTrip = order && order.status !== "AVAILABLE" && order.status !== "PAID";
@@ -240,9 +352,10 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         </div>
       </header>
 
-      {!hasKey && (
+      {!hasSarvam && (
         <div style={{ fontSize: 11, color: "var(--warn)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
-          Keyless mode · {voiceProvider}. Add GEMINI_API_KEY for natural human voice.
+          {voiceProvider}. Add SARVAM_API_KEY for natural Hindi/Kannada voice
+          {!hasGemini ? " · GEMINI_API_KEY for smarter understanding" : ""}.
         </div>
       )}
 
@@ -303,13 +416,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
 
       {/* VOX button */}
       <section style={{ display: "flex", justifyContent: "center", padding: "6px 0" }}>
-        <VoxButton
-          state={voice}
-          onPress={() => {
-            flash("listening", 1200);
-            setFeedback("Live voice lands in the next build — use the commands below for now.");
-          }}
-        />
+        <VoxButton state={voice} onPress={handleVoice} disabled={voice === "processing"} />
       </section>
 
       {/* Read-back confirmation for cash (the same path voice uses in Part 5) */}
@@ -319,6 +426,26 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
           <button onClick={confirmCash} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "none", background: "var(--accent)", color: "#04120d", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Yes</button>
           <button onClick={cancelConfirm} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>No</button>
         </section>
+      )}
+
+      {/* Sarvam auto-detects the language, so only the keyless Web Speech path
+          needs a picker. */}
+      {hasSarvam ? (
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>🎙 Speak any language — auto-detected (Kannada, Hindi, English, mixed).</div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+          <span style={{ color: "var(--muted)" }}>🎙 Voice:</span>
+          {([["en-IN", "EN"], ["hi-IN", "हिं"], ["kn-IN", "ಕನ್ನಡ"]] as const).map(([code, label]) => (
+            <button
+              key={code}
+              onClick={() => setVoiceLang(code)}
+              aria-pressed={voiceLang === code}
+              style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${voiceLang === code ? "var(--accent)" : "var(--border)"}`, background: voiceLang === code ? "rgba(22,212,168,0.14)" : "var(--surface-2)", color: voiceLang === code ? "var(--accent)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       )}
 
       {/* Simulated rider location — drives whether "Deliver" passes the geofence.
@@ -346,7 +473,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         {COMMANDS.map((c) => (
           <button
             key={c.intent}
-            disabled={busy || !loaded}
+            disabled={busy || !loaded || voice === "listening" || voice === "processing"}
             onClick={() => send(c.intent, c.kind)}
             style={{ padding: "10px 4px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", fontSize: 12, fontWeight: 600, cursor: busy || !loaded ? "default" : "pointer", opacity: busy || !loaded ? 0.5 : 1 }}
           >
