@@ -8,6 +8,7 @@ services:
     environment:
       # VOX starts with NO keys. Leave GEMINI_API_KEY empty for keyless demo mode.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
       DATABASE_URL: postgres://vox:vox@db:5432/vox
     depends_on:
       db:

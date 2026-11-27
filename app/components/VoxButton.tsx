@@ -13,12 +13,13 @@ const STATES: Record<VoiceState, { label: string; sub: string; color: string; ri
   confirm:    { label: "Confirm?",     sub: "yes to record",    color: "var(--warn)",   ring: "rgba(245,166,35,0.28)", pulse: true },
 };
 
-export default function VoxButton({ state, onPress }: { state: VoiceState; onPress?: () => void }) {
+export default function VoxButton({ state, onPress, disabled }: { state: VoiceState; onPress?: () => void; disabled?: boolean }) {
   const s = STATES[state];
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
       <button
         onClick={onPress}
+        disabled={disabled}
         aria-label={`Voice control — ${s.label}`}
         style={{
           width: 116, height: 116, borderRadius: "50%", border: "none", cursor: "pointer",

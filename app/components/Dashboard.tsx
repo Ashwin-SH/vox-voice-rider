@@ -56,11 +56,12 @@ interface HistEntry {
 }
 
 interface Props {
-  hasKey: boolean;
+  hasGemini: boolean;
+  hasSarvam: boolean;
   voiceProvider: string;
 }
 
-export default function Dashboard({ hasKey, voiceProvider }: Props) {
+export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props) {
   const [order, setOrder] = useState<Order | null>(null);
   const [voice, setVoice] = useState<VoiceState>("idle");
   const [feedback, setFeedback] = useState<string>("Tap VOX or a command to begin.");
@@ -222,19 +223,34 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
   // Push-to-talk: listen → interpret (server; Gemini when a key is set, rules
   // otherwise) → run it through the same engine as the chips → speak the reply.
   const handleVoice = useCallback(async () => {
-    if (busyRef.current) return;
-    if (!speech.isSupported) {
+    // A second tap while listening ends the recording early (Sarvam path).
+    if (voice === "listening") {
+      if (hasSarvam) speech.stopRecording();
+      return;
+    }
+    if (voice === "processing" || busyRef.current) return;
+    // Sarvam uses the mic recorder (not Web Speech), so only require Web Speech
+    // support on the keyless path.
+    if (!hasSarvam && !speech.isSupported) {
       setFeedback("Voice isn't available in this browser — use the commands below.");
       flash("blocked", 1800);
       return;
     }
+    const sp = (t: string) => (hasSarvam ? speech.speakSarvam(t, voiceLang) : speech.speak(t, voiceLang));
+
     let heard: { transcript: string; confidence: number };
     try {
       setVoice("listening");
-      heard = await speech.listen(voiceLang);
+      heard = hasSarvam ? await speech.listenSarvam() : await speech.listen(voiceLang);
     } catch {
       setFeedback("Didn't hear anything — tap VOX and speak.");
       setVoice("idle");
+      return;
+    }
+    if (!heard.transcript.trim()) {
+      setFeedback("I didn't catch that — say it again.");
+      void sp("I didn't catch that. Please say it again.");
+      flash("blocked", 1500);
       return;
     }
     setVoice("processing");
@@ -250,7 +266,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
       r = await resp.json();
     } catch {
       setFeedback("Couldn't understand — try again.");
-      speech.speak("Say that again, please.", voiceLang);
+      void sp("Say that again, please.");
       flash("blocked", 1600);
       return;
     }
@@ -259,19 +275,19 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
     if (pendingConfirm) {
       if (r.isNo) {
         cancelConfirm();
-        speech.speak("Cancelled.", voiceLang);
+        void sp("Cancelled.");
         return;
       }
       if (r.isYes) {
         const res = await confirmCash();
-        speech.speak(res?.feedback ?? "Recorded.", voiceLang);
+        void sp(res?.feedback ?? "Recorded.");
         return;
       }
     }
 
     if (!r.intent || r.intent === "UNKNOWN" || heard.confidence < CONFIDENCE_FLOOR) {
       setFeedback("I didn't catch that — say it again.");
-      speech.speak("I didn't catch that. Please say it again.", voiceLang);
+      void sp("I didn't catch that. Please say it again.");
       flash("blocked", 1600);
       return;
     }
@@ -284,8 +300,8 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
     };
     if (intent === "RECORD_CASH" && typeof r.amount === "number") opts.amount = r.amount;
     const res = await send(intent, kind, opts);
-    speech.speak(res?.feedback ?? "", voiceLang);
-  }, [speech, voiceLang, pendingConfirm, order, send, confirmCash, cancelConfirm]);
+    void sp(res?.feedback ?? "");
+  }, [voice, hasSarvam, speech, voiceLang, pendingConfirm, order, send, confirmCash, cancelConfirm]);
 
   const curStep = stepIndex(order?.status ?? null);
   const onTrip = order && order.status !== "AVAILABLE" && order.status !== "PAID";
@@ -319,9 +335,10 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
         </div>
       </header>
 
-      {!hasKey && (
+      {!hasSarvam && (
         <div style={{ fontSize: 11, color: "var(--warn)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
-          Keyless mode · {voiceProvider}. Add GEMINI_API_KEY for smarter natural-language understanding.
+          {voiceProvider}. Add SARVAM_API_KEY for natural Hindi/Kannada voice
+          {!hasGemini ? " · GEMINI_API_KEY for smarter understanding" : ""}.
         </div>
       )}
 
@@ -382,7 +399,7 @@ export default function Dashboard({ hasKey, voiceProvider }: Props) {
 
       {/* VOX button */}
       <section style={{ display: "flex", justifyContent: "center", padding: "6px 0" }}>
-        <VoxButton state={voice} onPress={handleVoice} />
+        <VoxButton state={voice} onPress={handleVoice} disabled={voice === "processing"} />
       </section>
 
       {/* Read-back confirmation for cash (the same path voice uses in Part 5) */}

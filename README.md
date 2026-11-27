@@ -72,9 +72,11 @@ by voice ("say yes to confirm").
 - **Keyless (default):** the browser's built-in Web Speech API for listening and
   speaking, and a multilingual rule interpreter on the server. No keys, works on
   any machine.
-- **With `GEMINI_API_KEY`:** the server uses Gemini to *understand* the speech by
-  meaning (handles free, mixed-language phrasing). The key stays on the server;
-  any failure falls back to the keyless path.
+- **With `SARVAM_API_KEY` (Indian-language speech):** Sarvam **Saarika** listens
+  and **Bulbul** speaks in a natural Hindi/Kannada voice — a real speech model,
+  not the browser. Key stays on the server; any failure falls back to Web Speech.
+- **With `GEMINI_API_KEY`:** the server also uses Gemini to *understand* the
+  speech by meaning (free, mixed-language phrasing). Key stays on the server.
 
 > The microphone needs **localhost or HTTPS** (browsers block mic access on plain
 > `http://` that isn't localhost) — fine for `docker compose up` on localhost.
