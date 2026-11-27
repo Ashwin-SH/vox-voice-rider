@@ -6,6 +6,11 @@ import { CONFIDENCE_FLOOR, type Decision, type IntentType } from "@/lib/intents"
 import VoxButton, { type VoiceState } from "./VoxButton";
 import DecisionPanel, { type Metrics } from "./DecisionPanel";
 import { useVoice } from "./useVoice";
+import { useWakeWord } from "./useWakeWord";
+import PlatformHeader from "./PlatformHeader";
+import { PLATFORMS, type PlatformId } from "./platforms";
+
+const PLATFORM_KEY = "vox.platform";
 
 // Lifecycle shown as a stepper. NAVIGATING_PICKUP sits at "Navigating" (before
 // pickup); NAVIGATING_DROP maps to "Picked up" so the bar never regresses when
@@ -74,10 +79,14 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
   const [panelOpen, setPanelOpen] = useState(false);
   const [atDrop, setAtDrop] = useState(true); // simulated rider location for the geofence demo
   const [voiceLang, setVoiceLang] = useState("en-IN");
+  const [platform, setPlatform] = useState<PlatformId>("rapido"); // which rider app we're skinned as
+  const [wakeOn, setWakeOn] = useState(false); // opt-in "Hey VOX" hands-free
   const speech = useVoice();
   const busyRef = useRef(false); // synchronous guard — airtight against a double tap
   const voiceActiveRef = useRef(false); // same, for the voice listen/interpret phase
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wakeStopRef = useRef<() => void>(() => {}); // synchronous wake-mic release
+  const [wakeSupported, setWakeSupported] = useState(false); // set after mount (no SSR mismatch)
 
   const refresh = useCallback(async () => {
     try {
@@ -123,6 +132,35 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
       if (resetTimer.current) clearTimeout(resetTimer.current);
     };
   }, []);
+
+  // Restore the last-picked platform skin (default Rapido), and detect wake-word
+  // support — both after mount, so the server and first client render agree and
+  // nothing in the rendered tree causes a hydration mismatch.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(PLATFORM_KEY);
+      if (saved === "rapido" || saved === "zomato") setPlatform(saved);
+    } catch {
+      /* ignore */
+    }
+    setWakeSupported("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+  }, []);
+
+  // Apply the platform's brand colours as CSS variables on :root, so the whole app
+  // — including the fixed-position judge panel — reskins at once. Persist the choice.
+  useEffect(() => {
+    const p = PLATFORMS[platform];
+    const root = document.documentElement.style;
+    root.setProperty("--accent", p.accent);
+    root.setProperty("--accent-dim", p.accentDim);
+    root.setProperty("--on-accent", p.onAccent);
+    root.setProperty("--glow", p.glow);
+    try {
+      localStorage.setItem(PLATFORM_KEY, platform);
+    } catch {
+      /* ignore */
+    }
+  }, [platform]);
 
   const flash = (state: VoiceState, ms: number) => {
     if (resetTimer.current) clearTimeout(resetTimer.current);
@@ -248,6 +286,9 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
 
     let heard: { transcript: string; confidence: number; language?: string };
     try {
+      // Release the wake-word mic synchronously before we open our own recognition,
+      // so the two never contend (effect teardown alone is deferred to after render).
+      wakeStopRef.current();
       setVoice("listening");
       heard = hasSarvam ? await speech.listenSarvam() : await speech.listen(voiceLang);
     } catch {
@@ -320,6 +361,11 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
     }
   }, [voice, hasSarvam, speech, voiceLang, pendingConfirm, order, send, confirmCash, cancelConfirm]);
 
+  // "Hey VOX" is best-effort and keyless (wakeSupported is detected after mount).
+  // It listens only while VOX is idle (so it never grabs the mic mid-interaction)
+  // and auto-pauses when the tab is hidden.
+  useWakeWord(wakeOn && wakeSupported && voice === "idle", handleVoice, wakeStopRef);
+
   const curStep = stepIndex(order?.status ?? null);
   const onTrip = order && order.status !== "AVAILABLE" && order.status !== "PAID";
 
@@ -337,20 +383,8 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
 
   return (
     <main style={{ maxWidth: 480, margin: "0 auto", minHeight: "100dvh", padding: 16, paddingBottom: 72, display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Top bar */}
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 34, height: 34, borderRadius: 9, background: "var(--accent)", display: "grid", placeItems: "center", color: "#04120d", fontWeight: 800 }}>V</div>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>VOX</div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>Rider operating layer</div>
-          </div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 12, color: online ? "var(--accent)" : "var(--danger)" }}>{online ? "● Online" : "● Offline"}</div>
-          <div style={{ fontSize: 11, color: "var(--muted)" }}>Ravi · {onTrip ? "On trip" : "Available"}</div>
-        </div>
-      </header>
+      {/* Platform tabs + branded header — VOX runs on top of whichever rider app. */}
+      <PlatformHeader platform={PLATFORMS[platform]} onSwitch={setPlatform} online={online} onTrip={!!onTrip} />
 
       {!hasSarvam && (
         <div style={{ fontSize: 11, color: "var(--warn)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
@@ -414,16 +448,38 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         {feedback}
       </div>
 
+      {/* Hey VOX — opt-in, honest best-effort hands-free (keyless Web Speech). */}
+      {wakeSupported && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 12px" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+              Hey VOX — hands-free
+              {wakeOn && voice === "idle" && <span style={{ color: "var(--accent)", fontSize: 11, fontWeight: 700 }}>● listening</span>}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>Best-effort — may miss or misfire. Tap-to-talk is always reliable.</div>
+          </div>
+          <button
+            role="switch"
+            aria-checked={wakeOn}
+            aria-label="Toggle Hey VOX hands-free wake word"
+            onClick={() => setWakeOn((v) => !v)}
+            style={{ width: 46, height: 26, borderRadius: 999, border: "none", cursor: "pointer", background: wakeOn ? "var(--accent)" : "var(--border)", position: "relative", transition: "background 160ms ease", flexShrink: 0 }}
+          >
+            <span style={{ position: "absolute", top: 3, left: wakeOn ? 23 : 3, width: 20, height: 20, borderRadius: "50%", background: "#fff", transition: "left 160ms ease" }} />
+          </button>
+        </div>
+      )}
+
       {/* VOX button */}
       <section style={{ display: "flex", justifyContent: "center", padding: "6px 0" }}>
-        <VoxButton state={voice} onPress={handleVoice} disabled={voice === "processing"} />
+        <VoxButton state={voice} onPress={handleVoice} disabled={voice === "processing"} idleHint={wakeOn && wakeSupported ? 'or say "Hey VOX"' : "tap to speak"} />
       </section>
 
       {/* Read-back confirmation for cash (the same path voice uses in Part 5) */}
       {pendingConfirm && (
         <section style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surface)", border: "1px solid var(--warn)", borderRadius: 12, padding: "10px 12px" }}>
           <span style={{ flex: 1, fontSize: 13 }}>Collected ₹{pendingConfirm.amount}?</span>
-          <button onClick={confirmCash} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "none", background: "var(--accent)", color: "#04120d", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Yes</button>
+          <button onClick={confirmCash} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "none", background: "var(--accent)", color: "var(--on-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Yes</button>
           <button onClick={cancelConfirm} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>No</button>
         </section>
       )}
@@ -440,7 +496,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
               key={code}
               onClick={() => setVoiceLang(code)}
               aria-pressed={voiceLang === code}
-              style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${voiceLang === code ? "var(--accent)" : "var(--border)"}`, background: voiceLang === code ? "rgba(22,212,168,0.14)" : "var(--surface-2)", color: voiceLang === code ? "var(--accent)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+              style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${voiceLang === code ? "var(--accent)" : "var(--border)"}`, background: voiceLang === code ? "color-mix(in srgb, var(--accent) 16%, transparent)" : "var(--surface-2)", color: voiceLang === code ? "var(--accent)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
             >
               {label}
             </button>
@@ -455,7 +511,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         <button
           onClick={() => setAtDrop(true)}
           aria-pressed={atDrop}
-          style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${atDrop ? "var(--accent)" : "var(--border)"}`, background: atDrop ? "rgba(22,212,168,0.14)" : "var(--surface-2)", color: atDrop ? "var(--accent)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+          style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${atDrop ? "var(--accent)" : "var(--border)"}`, background: atDrop ? "color-mix(in srgb, var(--accent) 16%, transparent)" : "var(--surface-2)", color: atDrop ? "var(--accent)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
         >
           At drop
         </button>
