@@ -88,6 +88,16 @@ export async function ensureSchema(): Promise<void> {
         );
         CREATE INDEX IF NOT EXISTS idx_events_order ON task_events(order_id);
       `);
+      // Idempotent migrations for PRE-EXISTING volumes: CREATE TABLE IF NOT EXISTS
+      // won't add a new column or constraint to a table that already exists.
+      await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cod_amount INTEGER NOT NULL DEFAULT 0`);
+      // Backfill the seed orders' COD on an old volume (seed won't re-run once the
+      // table is non-empty); only touches rows still at the 0 default.
+      await p.query(`
+        UPDATE orders SET cod_amount = v.cod
+        FROM (VALUES ('ord_1001', 320), ('ord_1002', 250), ('ord_1003', 180)) AS v(id, cod)
+        WHERE orders.id = v.id AND orders.cod_amount = 0
+      `);
       // Named status constraint applied idempotently — CREATE TABLE IF NOT EXISTS
       // won't add a CHECK to a table from an existing volume, so enforce it here.
       await p.query(`
