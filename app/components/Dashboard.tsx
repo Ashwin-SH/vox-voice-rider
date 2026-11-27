@@ -411,20 +411,25 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         </section>
       )}
 
-      {/* Voice language for the browser recogniser (keyless path) */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-        <span style={{ color: "var(--muted)" }}>🎙 Voice:</span>
-        {([["en-IN", "EN"], ["hi-IN", "हिं"], ["kn-IN", "ಕನ್ನಡ"]] as const).map(([code, label]) => (
-          <button
-            key={code}
-            onClick={() => setVoiceLang(code)}
-            aria-pressed={voiceLang === code}
-            style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${voiceLang === code ? "var(--accent)" : "var(--border)"}`, background: voiceLang === code ? "rgba(22,212,168,0.14)" : "var(--surface-2)", color: voiceLang === code ? "var(--accent)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* Sarvam auto-detects the language, so only the keyless Web Speech path
+          needs a picker. */}
+      {hasSarvam ? (
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>🎙 Speak any language — auto-detected (Kannada, Hindi, English, mixed).</div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+          <span style={{ color: "var(--muted)" }}>🎙 Voice:</span>
+          {([["en-IN", "EN"], ["hi-IN", "हिं"], ["kn-IN", "ಕನ್ನಡ"]] as const).map(([code, label]) => (
+            <button
+              key={code}
+              onClick={() => setVoiceLang(code)}
+              aria-pressed={voiceLang === code}
+              style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${voiceLang === code ? "var(--accent)" : "var(--border)"}`, background: voiceLang === code ? "rgba(22,212,168,0.14)" : "var(--surface-2)", color: voiceLang === code ? "var(--accent)" : "var(--text)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Simulated rider location — drives whether "Deliver" passes the geofence.
           Lets the demo show VOX refusing an out-of-zone delivery. */}

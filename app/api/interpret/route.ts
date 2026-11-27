@@ -17,10 +17,10 @@ interface Body {
   status?: string;
 }
 
-// POST /api/interpret — turn a (multilingual) transcript into a structured intent.
-// With GEMINI_API_KEY the model does the understanding ("thinks" about meaning);
-// with no key it uses the deterministic rule interpreter. The key never leaves
-// the server. Any Gemini failure falls back to the rules so the path never dies.
+// POST /api/interpret — turn a (multilingual) transcript into a structured intent
+// BY MEANING. With Gemini or Sarvam the model understands any language/phrasing
+// (Kannada, Hindi, mixed); with no key it uses the deterministic rule interpreter.
+// Keys never leave the server; any model failure falls back so the path never dies.
 export async function POST(request: Request) {
   let body: Body;
   try {
@@ -31,42 +31,89 @@ export async function POST(request: Request) {
   const transcript = (body.transcript ?? "").trim().slice(0, 500);
   if (!transcript) return jsonError("Missing 'transcript'", 400);
 
-  const key = process.env.GEMINI_API_KEY?.trim();
-  if (key) {
+  const gemini = process.env.GEMINI_API_KEY?.trim();
+  if (gemini) {
     try {
-      const g = await interpretWithGemini(transcript, body, key);
+      const g = await interpretWithGemini(transcript, body, gemini);
       if (g) return NextResponse.json({ ...g, source: "gemini", transcript });
     } catch (e) {
-      console.error("[interpret] gemini failed, falling back to rules:", e);
+      console.error("[interpret] gemini failed, trying next:", e);
+    }
+  }
+  const sarvam = process.env.SARVAM_API_KEY?.trim();
+  if (sarvam) {
+    try {
+      const s = await interpretWithSarvam(transcript, body, sarvam);
+      if (s) return NextResponse.json({ ...s, source: "sarvam", transcript });
+    } catch (e) {
+      console.error("[interpret] sarvam failed, falling back to rules:", e);
     }
   }
   const r = interpret(transcript, { awaitingConfirm: body.awaitingConfirm });
   return NextResponse.json({ ...r, source: "rules" });
 }
 
-async function interpretWithGemini(transcript: string, body: Body, key: string): Promise<Interpretation | null> {
-  const prompt = `You are the intent parser for VOX, a hands-free assistant for Indian delivery riders.
-The rider spoke (English, Hindi, Kannada, or mixed/Hinglish). Understand the MEANING, not exact words.
-Current order status: ${body.status ?? "unknown"}.
-${body.awaitingConfirm ? "The rider is answering a yes/no read-back to confirm a cash amount." : ""}
+const SYSTEM = `You map an Indian delivery rider's spoken command to ONE intent by MEANING.
+The rider may speak English, Hindi, Kannada, Tamil, or mixed (Hinglish / Kannada-English) — understand intent, not exact words.
+Intents: ${JSON.stringify(INTENTS)}.
+For cash, extract the rupee amount as a number. If the rider is answering a yes/no confirmation, set isYes or isNo.
+Reply with ONLY compact JSON: {"intent":"...","amount":<number>,"isYes":<bool>,"isNo":<bool>}. Omit fields that don't apply. Use UNKNOWN if genuinely unclear.`;
 
-Rider said: "${transcript}"
+function ctxLine(body: Body): string {
+  return `Current order status: ${body.status ?? "unknown"}.${body.awaitingConfirm ? " The rider is answering a yes/no read-back for a cash amount." : ""}`;
+}
 
-Return ONLY JSON with this shape:
-{"intent": one of ${JSON.stringify(INTENTS)}, "amount": number (rupees, only for cash), "isYes": boolean, "isNo": boolean}
-Use UNKNOWN if unclear. Only include amount/isYes/isNo when relevant.`;
+function parseModelJson(text: string, transcript: string): Interpretation {
+  const match = text.match(/\{[\s\S]*\}/);
+  const parsed = match ? (JSON.parse(match[0]) as Partial<Interpretation>) : {};
+  const intent = (INTENTS.includes(parsed.intent as IntentType) ? parsed.intent : "UNKNOWN") as IntentType;
+  const amount =
+    typeof parsed.amount === "number" && Number.isFinite(parsed.amount) ? Math.round(parsed.amount) : extractAmount(transcript);
+  return { intent, amount, isYes: parsed.isYes === true, isNo: parsed.isNo === true, transcript };
+}
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6000);
+async function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
   try {
+    return await fn(c.signal);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function interpretWithSarvam(transcript: string, body: Body, key: string): Promise<Interpretation | null> {
+  return withTimeout(async (signal) => {
+    const res = await fetch("https://api.sarvam.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "api-subscription-key": key, "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model: "sarvam-105b",
+        temperature: 0,
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: `${ctxLine(body)}\nRider said: "${transcript}"` },
+        ],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text: string | undefined = data?.choices?.[0]?.message?.content;
+    return text ? parseModelJson(text, transcript) : null;
+  }, 7000);
+}
+
+async function interpretWithGemini(transcript: string, body: Body, key: string): Promise<Interpretation | null> {
+  return withTimeout(async (signal) => {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
+        signal,
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
+          contents: [{ parts: [{ text: `${SYSTEM}\n${ctxLine(body)}\nRider said: "${transcript}"` }] }],
           generationConfig: { responseMimeType: "application/json", temperature: 0 },
         }),
       }
@@ -74,13 +121,6 @@ Use UNKNOWN if unclear. Only include amount/isYes/isNo when relevant.`;
     if (!res.ok) return null;
     const data = await res.json();
     const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return null;
-    const parsed = JSON.parse(text) as Partial<Interpretation>;
-    const intent = (INTENTS.includes(parsed.intent as IntentType) ? parsed.intent : "UNKNOWN") as IntentType;
-    const amount =
-      typeof parsed.amount === "number" && Number.isFinite(parsed.amount) ? Math.round(parsed.amount) : extractAmount(transcript);
-    return { intent, amount, isYes: parsed.isYes === true, isNo: parsed.isNo === true, transcript };
-  } finally {
-    clearTimeout(timer);
-  }
+    return text ? parseModelJson(text, transcript) : null;
+  }, 6000);
 }

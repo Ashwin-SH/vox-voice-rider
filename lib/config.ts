@@ -11,7 +11,7 @@ export function getVoiceConfig(): VoiceConfig {
   const provider = hasSarvam
     ? hasGemini
       ? "Sarvam voice + Gemini understanding"
-      : "Sarvam · Indian-language voice"
+      : "Sarvam · Indian-language voice + understanding"
     : hasGemini
       ? "Web Speech + Gemini understanding"
       : "Browser Web Speech (keyless)";
