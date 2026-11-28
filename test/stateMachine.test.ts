@@ -137,3 +137,15 @@ test("DELIVERED with NaN coordinates blocks cleanly (no 'NaN metres')", () => {
   assert.equal(d.validation, "BLOCKED");
   assert.doesNotMatch(d.feedback, /NaN/);
 });
+
+test("REJECT on AVAILABLE is allowed, no state change (client advances)", () => {
+  const d = decide(order("AVAILABLE"), i({ intent: "REJECT_ORDER" }));
+  assert.equal(d.validation, "PASSED");
+  assert.equal(d.action, "REJECT_ORDER");
+  assert.equal(d.statusAfter, null); // order stays AVAILABLE
+});
+
+test("REJECT when no request is on offer is blocked", () => {
+  const d = decide(order("ACCEPTED"), i({ intent: "REJECT_ORDER" }));
+  assert.equal(d.validation, "BLOCKED");
+});

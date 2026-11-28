@@ -119,32 +119,64 @@ export async function ensureSchema(): Promise<void> {
   return schemaReady;
 }
 
+// Deterministic demo scenario — real-ish Bengaluru coordinates so the geofence math
+// is meaningful. Order matters: the journey offers these oldest-first. Keep this the
+// single source of truth so seed() and resetScenario() stay identical.
+type SeedOrder = [string, string, number, number, string, number, number, number, number, number, string, string];
+// distance_km is kept consistent with the haversine of the pickup/drop coords, so
+// the spoken read-out, the nav strip and QUERY_DISTANCE all agree.
+const SEED_ORDERS: SeedOrder[] = [
+  ["ord_1001", "Jayanagar 4th Block", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 2.0, 84, 320, "Priya", "+91 90000 11111"],
+  ["ord_1002", "Koramangala", 12.9352, 77.6245, "HSR Layout", 12.9116, 77.6389, 3.0, 66, 250, "Arjun", "+91 90000 22222"],
+  ["ord_1003", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 1.3, 48, 180, "Sana", "+91 90000 33333"],
+];
+
+async function insertSeed(client: PoolClient): Promise<void> {
+  await client.query(
+    `INSERT INTO riders (id, name, city, phone, lang_pref, available)
+     VALUES ('rider_ravi', 'Ravi Kumar', 'Bengaluru', '+91 90000 00001', 'kn', true)
+     ON CONFLICT (id) DO NOTHING`
+  );
+  for (const o of SEED_ORDERS) {
+    await client.query(
+      `INSERT INTO orders
+        (id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, cod_amount, customer_name, customer_phone)
+       VALUES ($1,'AVAILABLE',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (id) DO NOTHING`,
+      o
+    );
+  }
+}
+
 async function seed(p: Pool): Promise<void> {
-  // Real-ish Bengaluru coordinates so the geofence math (Part 2) is meaningful.
-  const orders: Array<[string, string, number, number, string, number, number, number, number, number, string, string]> = [
-    ["ord_1001", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 1.3, 62, 320, "Priya", "+91 90000 11111"],
-    ["ord_1002", "Koramangala", 12.9352, 77.6245, "HSR Layout", 12.9116, 77.6389, 3.0, 48, 250, "Arjun", "+91 90000 22222"],
-    ["ord_1003", "Jayanagar", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 2.0, 44, 180, "Sana", "+91 90000 33333"],
-  ];
   // One transaction: either the whole seed lands or none of it does, so a retry
   // never sees a partial table and skips the rest.
   const client = await p.connect();
   try {
     await client.query("BEGIN");
-    await client.query(
-      `INSERT INTO riders (id, name, city, phone, lang_pref, available)
-       VALUES ('rider_ravi', 'Ravi Kumar', 'Bengaluru', '+91 90000 00001', 'kn', true)
-       ON CONFLICT (id) DO NOTHING`
-    );
-    for (const o of orders) {
-      await client.query(
-        `INSERT INTO orders
-          (id, status, pickup_name, pickup_lat, pickup_lng, drop_name, drop_lat, drop_lng, distance_km, earnings, cod_amount, customer_name, customer_phone)
-         VALUES ($1,'AVAILABLE',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-         ON CONFLICT (id) DO NOTHING`,
-        o
-      );
-    }
+    await insertSeed(client);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Restore the deterministic demo from any state: clear rides/txns/events and
+// re-seed. Riders are kept. Used by POST /api/orders/reset so every demo run starts
+// identically. All-or-nothing in one transaction.
+export async function resetScenario(): Promise<void> {
+  if (!isDbConfigured()) throw new Error("DATABASE_URL is not configured");
+  await ensureSchema();
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`DELETE FROM transactions`);
+    await client.query(`DELETE FROM task_events`);
+    await client.query(`DELETE FROM orders`);
+    await insertSeed(client);
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});

@@ -7,8 +7,16 @@ import { randomUUID } from "node:crypto";
 const RIDER_ID = "rider_ravi";
 const MAX_TRANSCRIPT = 500;
 
-// The rider's single point of focus: their active order, else the next available.
-async function loadFocusOrder(): Promise<Order | null> {
+// The rider's point of focus. When the client names an orderId (the specific ride
+// it's acting on — e.g. the request it's offering the rider), we focus exactly that
+// order; decide() still validates the transition. Otherwise fall back to the active
+// order, else the next available (single-rider demo default).
+async function loadFocusOrder(orderId?: string): Promise<Order | null> {
+  if (orderId) {
+    const one = await query<Order>(`SELECT ${ORDER_COLS_FULL} FROM orders WHERE id = $1 LIMIT 1`, [orderId]);
+    if (one.rows[0]) return one.rows[0];
+    // Unknown id → fall through to the default focus rather than erroring.
+  }
   const active = await query<Order>(
     `SELECT ${ORDER_COLS_FULL} FROM orders WHERE status NOT IN ('AVAILABLE','PAID') ORDER BY created_at ASC, id ASC LIMIT 1`
   );
@@ -49,7 +57,7 @@ export interface IntentResult {
 // never mutates anything itself; only PASSED decisions write, and every write is a
 // compare-and-swap so concurrent duplicates cannot both succeed.
 export async function runIntent(input: IntentInput): Promise<IntentResult> {
-  const order = await loadFocusOrder();
+  const order = await loadFocusOrder(input.orderId);
   let decision = decide(order, input);
   let focus = order;
 
