@@ -1,9 +1,12 @@
 # VOX — Hands-free voice operating layer for India's gig riders
 
-VOX lets delivery partners, quick-commerce riders and bike-taxi captains run their
-whole job by voice — accept an order, navigate, mark pickup, call the customer,
-complete delivery and record cash — **hands-free, in their own language**
-(Kannada, Hindi, English and code-switching between them).
+VOX sits **on top of** a rider's app (Rapido, Zomato, …) and lets them run the whole
+job by voice — go online, accept a ride, navigate, confirm pickup, call the customer,
+complete the drop and record cash — **hands-free, in their own language** (Kannada,
+Hindi, English, and code-switching between them).
+
+When you open it, **you are the rider.** No onboarding, no slideshow — you go online,
+a ride request arrives, and you operate the whole journey by voice.
 
 Theme: *Livelihoods and small business* · Scaler × Wispr Flow "India Runs on Voice".
 
@@ -15,68 +18,118 @@ docker compose up --build
 
 Then open **http://localhost:3000**.
 
-> If port 3000 is busy on your machine, start it on another:
-> `VOX_WEB_PORT=3200 docker compose up --build` and open that port.
+> If port 3000 is busy, start it elsewhere:
+> `VOX_WEB_PORT=3200 docker compose up --build` → open that port.
 
-The app **starts and shows its main screen with no keys at all.** In this keyless mode
-it uses the browser's built-in Web Speech API for voice.
+The app **boots and is fully usable with no API keys.** In this **keyless demo mode**
+it uses the browser's built-in Web Speech API for listening/speaking and a
+multilingual rule interpreter on the server. The UI clearly labels this mode so it's
+never mistaken for live AI.
 
-## Optional: smarter understanding (free)
+> The mic needs **localhost or HTTPS** (browsers block mic on plain `http://` that
+> isn't localhost) — fine for `docker compose up` on localhost.
 
-For smarter natural-language understanding of free, mixed-language speech
-(Google Gemini), add a **free** Google AI Studio key — get one at https://aistudio.google.com (no card):
+## Optional: real Indian-language voice + smarter understanding
+
+Keys are **optional** and strictly server-side (never shipped to the browser, never
+committed — `.env` is gitignored and excluded from the Docker image). No feature
+crashes for lack of a key; each one just upgrades a capability:
 
 ```bash
 cp .env.example .env
-# edit .env and set GEMINI_API_KEY=...
+# SARVAM_API_KEY=...   → Sarvam Saarika (STT) + Bulbul (TTS): natural Hindi/Kannada
+#                         voice + sarvam-105b understanding + translation
+# GEMINI_API_KEY=...   → Google Gemini understanding (free key at aistudio.google.com)
 docker compose up --build
 ```
 
-Without a key the app still runs and uses the keyless rule interpreter. No feature crashes for lack of a key.
+Priority when a key is present: **Sarvam → Gemini → rules** (Sarvam is India-tuned).
+Any model failure falls back to the next, so the voice path never dies.
 
-## Stack
+## The judge demo script (≈90 seconds)
 
-- **Next.js 16** (App Router) — UI + server API routes (keeps any API key server-side)
-- **PostgreSQL** — rider, order, task-state and transaction data
-- **Web Speech API** for voice (both modes); **Gemini** for understanding when a key is set
-- **Deterministic validation layer** — the AI interprets; the app decides what is allowed
+1. **Open** the app — you're in the rider cockpit (Ravi, Jayanagar, Bengaluru).
+2. **Go online** — tap *Go Online* or say *"go online"*. VOX activates.
+3. **A request arrives on its own** — a chime, VOX reads it out, a countdown starts.
+4. **Say "accept"** — the ride is accepted; the map marker starts moving to pickup.
+5. **Navigate** — distance/ETA tick down as the rider moves.
+6. **Say "pickup done"** at the pickup — navigation switches to the drop.
+7. **Code-switch** mid-ride — *"drop kitna door hai?"*, *"how much have I earned?"* —
+   VOX keeps ride context and answers.
+8. **Safety test** — while still en route, say *"delivered"*. VOX **refuses**:
+   *"You're still N metres away."* Open **📊 VOX Trace**: GPS/geofence `FAILED`,
+   validation `BLOCKED`, state change `NONE` — a real rejection, not a warning.
+9. **Recover** — say *"no, call the customer"* — VOX calls, ride intact.
+10. **Arrive & complete** — reach the drop (or use the dev panel), say *"delivered"* →
+    it passes; then *"cash collected, three twenty"* → read-back → *"yes"* → **PAID**.
+11. **Earnings update** (real DB) — the header total goes up.
+12. **Next ride arrives** — the loop continues.
 
-## How it's built (architecture)
+**Reset** anytime from the dev panel to restore the exact same deterministic demo.
+
+## Simulation & developer controls (collapsible, bottom of screen)
+
+Tucked away so the rider UI stays clean, easy to find for a judge:
+
+- **Scenario:** Reset demo · Trigger request
+- **Movement:** speed 2/4/8× · pause/resume · jump to pickup/drop · **180 m away**
+  (forces the geofence block on demand)
+- **Scenario testing (recovery demos):**
+  - *Simulate noisy / unclear input* → injects a low-confidence utterance through the
+    **same** pipeline → VOX asks to repeat, ride context preserved (shown in the trace)
+  - *STT fail* → the next voice capture fails once, then recovers (retry or manual)
+  - *Network fail* → the next engine call fails **before** any write, so the ride is
+    provably unchanged; recovers on the next attempt
+- **Manual actions:** the same engine path as voice — never a validation bypass.
+
+## Architecture
 
 ```
-Voice → Intent → Context → Validation → Action → Feedback
-        (AI interprets)   (our code decides permission)
+Voice → Intent → Context → Validation → Execution → Feedback
+        (AI interprets)    (our deterministic engine decides & writes)
 ```
 
-The AI is responsible for *understanding*. Our code is responsible for *execution*:
-a deterministic state machine checks task state, GPS geofence, confirmations and
-duplicate actions before anything is recorded. Voice can replace a tap — never the proof.
+The AI is responsible only for **understanding** speech. A deterministic state machine
+(`lib/stateMachine.ts`) decides what is **allowed** — task state, GPS geofence,
+read-back confirmations, duplicate prevention, cash-amount sanity — and every state
+change is a compare-and-swap write in PostgreSQL (`lib/engine.ts`). Voice can replace a
+tap; it can never replace the proof. The same engine validates voice **and** manual
+actions.
 
-## API (mock backend)
+## What's genuinely functional vs simulated
+
+**Functional (real):**
+- Deterministic validation engine + PostgreSQL state (CAS writes, audit trail).
+- GPS **geofence enforcement** — the rider's live simulated coordinates are checked
+  server-side; an out-of-zone delivery is genuinely blocked.
+- Real STT/TTS/understanding/translation when `SARVAM_API_KEY` is set; browser Web
+  Speech + rule interpreter when keyless. Multilingual + code-switching.
+- Earnings/rides totals read from real PAID orders.
+- VOX Trace, metrics and taps-saved — read from actual engine responses, nothing
+  scripted.
+
+**Simulated (for the demo, by design):**
+- The **map** is a schematic SVG (no paid maps API) with a projected route + moving
+  marker. Rider movement is a sim clock (speed-adjustable); ETA is a realistic estimate.
+- Ride **requests** arrive from a seeded, deterministic scenario (repeatable).
+- **Emergency / road-hazard** actions surface a clearly-labelled *simulated* alert.
+
+## API
 
 ```bash
 curl localhost:3000/api/health            # {"ok":true,"db":"connected"}
 curl localhost:3000/api/health?strict=1   # 503 if the DB is down (probe mode)
-curl localhost:3000/api/orders            # seeded orders (no customer phone)
+curl localhost:3000/api/orders?status=AVAILABLE   # the offer queue
 curl localhost:3000/api/orders/current    # the rider's active / next order
+curl localhost:3000/api/stats             # {"earnings":N,"rides":N} from PAID orders
+curl -X POST localhost:3000/api/orders/reset      # restore the deterministic demo
+# POST /api/interpret  {transcript,status,awaitingConfirm} → structured intent
+# POST /api/intent     {intent,orderId,riderLat,riderLng,...} → engine Decision
 ```
 
-## Voice
+## Stack
 
-Tap the **VOX** button and speak a command — English, Hindi or Kannada (pick the
-language with the 🎙 selector). Natural phrasing works, not fixed commands:
-"accept", "haan le lo", "howdu swikarishu" all accept; "delivered", "pahuncha
-diya" all mark delivered. VOX speaks its reply back and runs the cash read-back
-by voice ("say yes to confirm").
-
-- **Keyless (default):** the browser's built-in Web Speech API for listening and
-  speaking, and a multilingual rule interpreter on the server. No keys, works on
-  any machine.
-- **With `SARVAM_API_KEY` (Indian-language speech):** Sarvam **Saarika** listens
-  and **Bulbul** speaks in a natural Hindi/Kannada voice — a real speech model,
-  not the browser. Key stays on the server; any failure falls back to Web Speech.
-- **With `GEMINI_API_KEY`:** the server also uses Gemini to *understand* the
-  speech by meaning (free, mixed-language phrasing). Key stays on the server.
-
-> The microphone needs **localhost or HTTPS** (browsers block mic access on plain
-> `http://` that isn't localhost) — fine for `docker compose up` on localhost.
+- **Next.js 16** (App Router) — UI + server API routes (keeps any key server-side)
+- **PostgreSQL** — rider, order, task-state and transaction data
+- **Sarvam AI** (keyed) / **Web Speech API** (keyless) for voice; **Gemini** optional
+- **Deterministic validation engine** — the AI interprets; the app decides

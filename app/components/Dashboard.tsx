@@ -81,6 +81,10 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
   const [panelOpen, setPanelOpen] = useState(false);
   const [voiceLang, setVoiceLang] = useState("en-IN");
   const [safety, setSafety] = useState<{ type: "EMERGENCY" | "HAZARD" } | null>(null);
+  const [simStt, setSimStt] = useState(false); // armed: next voice capture fails
+  const [simNet, setSimNet] = useState(false); // armed: next engine call fails
+  const sttFailRef = useRef(false);
+  const netFailRef = useRef(false);
   const [platform, setPlatform] = useState<PlatformId>("rapido");
   const [wakeOn, setWakeOn] = useState(false);
   const [wakeSupported, setWakeSupported] = useState(false);
@@ -234,6 +238,17 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         if (opts?.confirmed) body.confirmed = true;
       }
       try {
+        // Simulated network failure (dev): fail BEFORE the fetch, so no state is
+        // touched — the ride is provably unchanged. Recovers on the next attempt.
+        if (netFailRef.current) {
+          netFailRef.current = false;
+          setSimNet(false);
+          pushTrace({ source: opts?.source ?? "voice", transcript: opts?.transcript, intent,
+            decision: { intent, orderId: opts?.orderId ?? null, statusBefore: activeOrder?.status ?? null, statusAfter: null, validation: "NOOP", action: "NETWORK_ERROR", feedback: "Network error — ride unchanged." } as Decision });
+          setFeedback("Network error — ride unchanged. Try again.");
+          flash("blocked", 1800);
+          return { feedback: "Network error — ride unchanged. Try again." };
+        }
         const r = await fetch("/api/intent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -275,7 +290,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         busyRef.current = false;
       }
     },
-    [order, pushTrace]
+    [order, activeOrder, pushTrace]
   );
 
   const confirmCash = useCallback(async () => {
@@ -299,53 +314,30 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
     [send, activeOrder]
   );
 
-  // Push-to-talk (and wake): listen → interpret → route (client answer, offer
-  // accept/reject, or the engine) → speak back.
-  const handleVoice = useCallback(async () => {
-    if (voice === "listening") {
-      if (hasSarvam) speech.stopRecording();
-      return;
-    }
-    if (voice === "processing" || busyRef.current || voiceActiveRef.current) return;
-    if (!hasSarvam && !speech.isSupported) {
-      setFeedback("Voice isn't available in this browser — use the controls below.");
-      flash("blocked", 1800);
-      return;
-    }
-    voiceActiveRef.current = true;
-    try {
-      let replyLang = voiceLang;
-      const sp = (t: string) => (hasSarvam ? speech.speakSarvam(t, replyLang) : speech.speak(t, voiceLang));
+  // The shared tail of every voice interaction: interpret the transcript → route it
+  // (client answer, offer accept/reject, or the engine) → speak back. Factored out
+  // so BOTH real speech and an injected test utterance go through the exact same path.
+  const processUtterance = useCallback(
+    async (transcript: string, confidence: number, language: string | undefined) => {
+      const replyLang = language ?? replyLangRef.current;
+      if (language) replyLangRef.current = language;
+      const sp = (t: string) => (hasSarvam ? speech.speakSarvam(t, replyLang) : speech.speak(t, voiceLangRef.current));
 
-      let heard: { transcript: string; confidence: number; language?: string };
-      try {
-        wakeStopRef.current();
-        setVoice("listening");
-        heard = hasSarvam ? await speech.listenSarvam() : await speech.listen(voiceLang);
-      } catch {
-        setFeedback("Didn't hear anything — tap VOX and speak.");
-        setVoice("idle");
-        return;
-      }
-      if (heard.language) {
-        replyLang = heard.language;
-        replyLangRef.current = heard.language;
-      }
-      if (!heard.transcript.trim()) {
+      if (!transcript.trim()) {
         setFeedback("I didn't catch that — say it again.");
         void sp("I didn't catch that. Please say it again.");
         flash("blocked", 1500);
         return;
       }
       setVoice("processing");
-      setFeedback(`“${heard.transcript}”`);
+      setFeedback(`“${transcript}”`);
 
       let r: { intent?: string; amount?: number; isYes?: boolean; isNo?: boolean };
       try {
         const resp = await fetch("/api/interpret", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ transcript: heard.transcript, awaitingConfirm: !!pendingConfirm, status: activeOrder?.status }),
+          body: JSON.stringify({ transcript, awaitingConfirm: !!pendingConfirm, status: activeOrder?.status }),
         });
         r = await resp.json();
       } catch {
@@ -373,7 +365,14 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         return;
       }
 
-      if (!r.intent || r.intent === "UNKNOWN" || heard.confidence < CONFIDENCE_FLOOR) {
+      // Low confidence or genuinely unclear → ask again, never act. Logged to the
+      // trace as a real NOOP/CLARIFY decision (this is the misheard-recovery proof).
+      if (!r.intent || r.intent === "UNKNOWN" || confidence < CONFIDENCE_FLOOR) {
+        const intent = (r.intent as IntentType) || "UNKNOWN";
+        pushTrace({
+          source: "voice", transcript, intent, language, confidence,
+          decision: { intent, language, confidence, orderId: activeOrder?.id ?? null, statusBefore: activeOrder?.status ?? null, statusAfter: null, validation: "NOOP", action: "CLARIFY", feedback: "I didn't catch that — say it again." },
+        });
         setFeedback("I didn't catch that — say it again.");
         void sp("I didn't catch that. Please say it again.");
         flash("blocked", 1600);
@@ -411,7 +410,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
           }
         }
         setFeedback(answer);
-        pushTrace({ source: "voice", transcript: heard.transcript, intent, language: heard.language, answer });
+        pushTrace({ source: "voice", transcript, intent, language, answer });
         void sp(answer);
         flash("speaking", 1600);
         return;
@@ -425,7 +424,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
           flash("blocked", 1500);
           return;
         }
-        const res = await send("ACCEPT_ORDER", undefined, { orderId: s.offer.id, confidence: heard.confidence, transcript: heard.transcript, language: heard.language });
+        const res = await send("ACCEPT_ORDER", undefined, { orderId: s.offer.id, confidence, transcript, language });
         void sp(res?.feedback ?? "");
         return;
       }
@@ -436,7 +435,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
           flash("blocked", 1500);
           return;
         }
-        const res = await send("REJECT_ORDER", undefined, { orderId: s.offer.id, confidence: heard.confidence, transcript: heard.transcript, language: heard.language });
+        const res = await send("REJECT_ORDER", undefined, { orderId: s.offer.id, confidence, transcript, language });
         s.rejectOffer();
         void sp(res?.feedback ?? "Finding your next ride.");
         return;
@@ -445,18 +444,70 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
       // Everything else runs against the active ride through the engine.
       const kind = intent === "MARK_DELIVERED" ? "geo" : intent === "RECORD_CASH" ? "cash" : undefined;
       const opts: { amount?: number; confidence?: number; transcript?: string; orderId?: string; language?: string } = {
-        confidence: heard.confidence,
-        transcript: heard.transcript,
-        orderId: activeOrder?.id,
-        language: heard.language,
+        confidence, transcript, orderId: activeOrder?.id, language,
       };
       if (intent === "RECORD_CASH" && typeof r.amount === "number") opts.amount = r.amount;
       const res = await send(intent, kind, opts);
       void sp(res?.feedback ?? "");
+    },
+    [hasSarvam, speech, pendingConfirm, activeOrder, send, confirmCash, cancelConfirm, pushTrace]
+  );
+
+  // Push-to-talk (and wake): listen on the mic, then run the shared pipeline.
+  const handleVoice = useCallback(async () => {
+    if (voice === "listening") {
+      if (hasSarvam) speech.stopRecording();
+      return;
+    }
+    if (voice === "processing" || busyRef.current || voiceActiveRef.current) return;
+    if (!hasSarvam && !speech.isSupported) {
+      setFeedback("Voice isn't available in this browser — use the controls below.");
+      flash("blocked", 1800);
+      return;
+    }
+    voiceActiveRef.current = true;
+    try {
+      // Simulated STT failure (dev): the capture "fails" — recover via retry/manual.
+      if (sttFailRef.current) {
+        sttFailRef.current = false;
+        setSimStt(false);
+        setFeedback("Couldn't hear you (simulated) — tap VOX to retry, or use manual controls.");
+        if (hasSarvam) void speech.speakSarvam("I couldn't hear you. Please try again.", replyLangRef.current);
+        else speech.speak("I couldn't hear you. Please try again.", voiceLangRef.current);
+        flash("blocked", 1700);
+        return;
+      }
+      let heard: { transcript: string; confidence: number; language?: string };
+      try {
+        wakeStopRef.current();
+        setVoice("listening");
+        heard = hasSarvam ? await speech.listenSarvam() : await speech.listen(voiceLang);
+      } catch {
+        setFeedback("Didn't hear anything — tap VOX and speak.");
+        setVoice("idle");
+        return;
+      }
+      await processUtterance(heard.transcript, heard.confidence, heard.language);
     } finally {
       voiceActiveRef.current = false;
     }
-  }, [voice, hasSarvam, speech, voiceLang, pendingConfirm, activeOrder, send, confirmCash, cancelConfirm, pushTrace]);
+  }, [voice, hasSarvam, speech, voiceLang, processUtterance]);
+
+  // Inject a realistic noisy/ambiguous utterance through the SAME pipeline (dev) —
+  // so misheard-recovery is demoable on demand, not left to chance.
+  const simulateNoisy = useCallback(() => {
+    if (busyRef.current || voiceActiveRef.current || voice === "listening" || voice === "processing") return;
+    const phrases = ["uh, the, you know, that one", "umm... can you... the thing", "hmm, [static] ... go", "... take the ... er"];
+    const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+    wakeStopRef.current();
+    voiceActiveRef.current = true;
+    void processUtterance(phrase, 0.35, undefined).finally(() => {
+      voiceActiveRef.current = false;
+    });
+  }, [voice, processUtterance]);
+
+  const toggleSimStt = useCallback(() => setSimStt((v) => { const n = !v; sttFailRef.current = n; return n; }), []);
+  const toggleSimNet = useCallback(() => setSimNet((v) => { const n = !v; netFailRef.current = n; return n; }), []);
 
   useWakeWord(wakeOn && wakeSupported && voice === "idle", handleVoice, wakeStopRef);
 
@@ -521,6 +572,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
 
       {!hasSarvam && (
         <div style={{ fontSize: 11, color: "var(--warn)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
+          {!hasGemini && <strong>🔑 Demo mode (keyless) — browser speech + rule understanding. </strong>}
           {voiceProvider}. Add SARVAM_API_KEY for natural Hindi/Kannada voice
           {!hasGemini ? " · GEMINI_API_KEY for smarter understanding" : ""}.
         </div>
@@ -666,7 +718,13 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
       )}
 
       {/* Developer / simulation controls */}
-      <DevPanel sim={sim} order={activeOrder} onCommand={runCommand} canCommand={!busyRef.current && voice !== "listening" && voice !== "processing"} />
+      <DevPanel
+        sim={sim}
+        order={activeOrder}
+        onCommand={runCommand}
+        canCommand={!busyRef.current && voice !== "listening" && voice !== "processing"}
+        scenarios={{ onNoisy: simulateNoisy, stt: simStt, net: simNet, toggleStt: toggleSimStt, toggleNet: toggleSimNet }}
+      />
 
       {/* Judge trace */}
       <button onClick={() => setPanelOpen(true)} aria-label="Open VOX trace panel"

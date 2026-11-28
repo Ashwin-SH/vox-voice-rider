@@ -22,11 +22,13 @@ export default function DevPanel({
   order,
   onCommand,
   canCommand,
+  scenarios,
 }: {
   sim: RideSim;
   order: Order | null;
   onCommand: (intent: IntentType, kind?: "geo" | "cash") => void;
   canCommand: boolean;
+  scenarios: { onNoisy: () => void; stt: boolean; net: boolean; toggleStt: () => void; toggleNet: () => void };
 }) {
   const [open, setOpen] = useState(false);
   const inRide = !!order;
@@ -90,6 +92,37 @@ export default function DevPanel({
               {chip("→ Pickup", sim.jumpToPickup, !inRide)}
               {chip("→ Drop", sim.jumpToDrop, !inRide)}
               {chip("180 m away", sim.setFarFromDrop, !inRide, true)}
+            </div>
+          </div>
+
+          {/* Scenario testing — recovery/failure demos */}
+          <div>
+            <Label>Scenario testing (recovery demos)</Label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, marginBottom: 8 }}>
+              {chip("🔊 Simulate noisy / unclear input", scenarios.onNoisy)}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <button
+                onClick={scenarios.toggleStt}
+                style={{ padding: "8px 6px", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                  border: `1px solid ${scenarios.stt ? "var(--warn)" : "var(--border)"}`,
+                  background: scenarios.stt ? "color-mix(in srgb, var(--warn) 18%, transparent)" : "var(--surface-2)",
+                  color: scenarios.stt ? "var(--warn)" : "var(--text)" }}
+              >
+                STT fail: {scenarios.stt ? "ON" : "off"}
+              </button>
+              <button
+                onClick={scenarios.toggleNet}
+                style={{ padding: "8px 6px", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                  border: `1px solid ${scenarios.net ? "var(--warn)" : "var(--border)"}`,
+                  background: scenarios.net ? "color-mix(in srgb, var(--warn) 18%, transparent)" : "var(--surface-2)",
+                  color: scenarios.net ? "var(--warn)" : "var(--text)" }}
+              >
+                Network fail: {scenarios.net ? "ON" : "off"}
+              </button>
+            </div>
+            <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>
+              When ON, the next voice capture / engine call fails once, then recovers.
             </div>
           </div>
 
