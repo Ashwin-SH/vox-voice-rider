@@ -87,9 +87,16 @@ export function useWakeWord(
       };
       r.onerror = (ev: SpeechRecognitionErrorEvent) => {
         // Mic permission denied / unavailable → stop retrying (avoid a hot loop).
-        if (ev.error === "not-allowed" || ev.error === "service-not-allowed") stopped = true;
-        // 'network' (speech backend unreachable, e.g. venue wifi) and other errors
-        // can repeat every restart — back off after a few so we don't spin forever.
+        if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+          stopped = true;
+          return;
+        }
+        // Benign and expected: 'aborted' is our own rec.abort() (stale-session /
+        // visibility), 'no-speech' is ordinary silence. Don't count these — a quiet
+        // room would otherwise trip the backoff and silently kill the wake word.
+        if (ev.error === "no-speech" || ev.error === "aborted") return;
+        // Real failures ('network' on venue wifi, 'audio-capture', …) can repeat on
+        // every restart — back off after a few so we don't spin forever.
         consecutiveErrors += 1;
         if (consecutiveErrors >= 4) stopped = true;
       };

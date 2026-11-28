@@ -186,7 +186,7 @@ export function useRideSim(opts: {
       arrivedRef.current = "";
       if (prevId) {
         refreshStats();
-        if (onlineRef.current) presentNextOffer(3600); // leave room for the completion card
+        if (onlineRef.current) presentNextOffer(4500); // clears the completion card (3600) first — no mid-animation cut
       }
       prevActiveIdRef.current = null;
       return;

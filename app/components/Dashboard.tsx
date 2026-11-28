@@ -553,7 +553,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
     tapsOldWay: executed.reduce((s, e) => s + (TAP_COST[e.intent] ?? 2), 0),
   };
 
-  const busy = voice === "processing"; // re-renders (unlike the busyRef used for guards)
+  const busy = voice === "processing" || voice === "listening"; // reactive; also blocks taps while the mic is open
   const plat = PLATFORMS[platform];
   const pickup: GeoPoint | null = activeOrder ? { lat: activeOrder.pickup_lat, lng: activeOrder.pickup_lng } : null;
   const drop: GeoPoint | null = activeOrder ? { lat: activeOrder.drop_lat, lng: activeOrder.drop_lng } : null;
