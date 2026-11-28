@@ -123,10 +123,12 @@ export async function ensureSchema(): Promise<void> {
 // is meaningful. Order matters: the journey offers these oldest-first. Keep this the
 // single source of truth so seed() and resetScenario() stay identical.
 type SeedOrder = [string, string, number, number, string, number, number, number, number, number, string, string];
+// distance_km is kept consistent with the haversine of the pickup/drop coords, so
+// the spoken read-out, the nav strip and QUERY_DISTANCE all agree.
 const SEED_ORDERS: SeedOrder[] = [
-  ["ord_1001", "Jayanagar 4th Block", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 4.2, 84, 320, "Priya", "+91 90000 11111"],
+  ["ord_1001", "Jayanagar 4th Block", 12.925, 77.5938, "BTM Layout", 12.9166, 77.6101, 2.0, 84, 320, "Priya", "+91 90000 11111"],
   ["ord_1002", "Koramangala", 12.9352, 77.6245, "HSR Layout", 12.9116, 77.6389, 3.0, 66, 250, "Arjun", "+91 90000 22222"],
-  ["ord_1003", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 1.8, 48, 180, "Sana", "+91 90000 33333"],
+  ["ord_1003", "Indiranagar", 12.9719, 77.6412, "Domlur", 12.9609, 77.6387, 1.3, 48, 180, "Sana", "+91 90000 33333"],
 ];
 
 async function insertSeed(client: PoolClient): Promise<void> {

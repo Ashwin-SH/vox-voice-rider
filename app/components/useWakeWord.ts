@@ -39,6 +39,7 @@ export function useWakeWord(
     let stopped = false;
     let fired = false;
     let restartTimer: ReturnType<typeof setTimeout> | null = null;
+    let consecutiveErrors = 0; // bound the restart loop on a flaky/blocked backend
 
     const start = () => {
       if (stopped || fired || document.hidden) return;
@@ -68,6 +69,7 @@ export function useWakeWord(
       r.interimResults = true;
       r.maxAlternatives = 1;
       r.onresult = (e: SpeechRecognitionEvent) => {
+        consecutiveErrors = 0; // a result means the backend is working again
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const txt = (e.results[i]?.[0]?.transcript ?? "").toLowerCase();
           if (PHRASES.some((p) => txt.includes(p))) {
@@ -86,6 +88,10 @@ export function useWakeWord(
       r.onerror = (ev: SpeechRecognitionErrorEvent) => {
         // Mic permission denied / unavailable → stop retrying (avoid a hot loop).
         if (ev.error === "not-allowed" || ev.error === "service-not-allowed") stopped = true;
+        // 'network' (speech backend unreachable, e.g. venue wifi) and other errors
+        // can repeat every restart — back off after a few so we don't spin forever.
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= 4) stopped = true;
       };
       r.onend = () => {
         // Only the CURRENT session restarts; a stale session's onend (e.g. the one we

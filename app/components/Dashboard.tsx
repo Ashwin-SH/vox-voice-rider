@@ -81,6 +81,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
   const [panelOpen, setPanelOpen] = useState(false);
   const [voiceLang, setVoiceLang] = useState("en-IN");
   const [safety, setSafety] = useState<{ type: "EMERGENCY" | "HAZARD" } | null>(null);
+  const [justPaid, setJustPaid] = useState<Order | null>(null); // briefly held completed ride
   const [simStt, setSimStt] = useState(false); // armed: next voice capture fails
   const [simNet, setSimNet] = useState(false); // armed: next engine call fails
   const sttFailRef = useRef(false);
@@ -93,6 +94,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
   const busyRef = useRef(false);
   const voiceActiveRef = useRef(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const paidTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wakeStopRef = useRef<() => void>(() => {});
   const voiceLangRef = useRef(voiceLang);
   voiceLangRef.current = voiceLang;
@@ -195,7 +197,10 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
     };
   }, []);
 
-  useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    if (paidTimer.current) clearTimeout(paidTimer.current);
+  }, []);
 
   // A hazard report is transient; an emergency stays until the rider dismisses it.
   useEffect(() => {
@@ -273,7 +278,15 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         // A PAID order is already excluded from activeOrder, so the cockpit returns
         // to "searching" and the sim banks earnings + brings the next ride. We keep
         // `order` as-is until the next accept overwrites it (never shown while PAID).
-        setOrder((d.order as Order | null) ?? null);
+        const newOrder = (d.order as Order | null) ?? null;
+        setOrder(newOrder);
+        // Hold the finished ride briefly so the judge sees the journey complete
+        // (the "Paid" step lights up) before it returns to searching.
+        if (newOrder?.status === "PAID") {
+          setJustPaid(newOrder);
+          if (paidTimer.current) clearTimeout(paidTimer.current);
+          paidTimer.current = setTimeout(() => setJustPaid(null), 3600);
+        }
         if (dec?.sideEffect?.type === "CALL" && dec.sideEffect.value) {
           window.location.href = `tel:${String(dec.sideEffect.value).replace(/[^+\d]/g, "")}`;
         }
@@ -313,6 +326,19 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
     },
     [send, activeOrder]
   );
+
+  // Accept / reject buttons mirror the voice path: await the engine BEFORE advancing
+  // the offer, so a reject always lands an audit row (never a silent local drop).
+  const acceptOffer = useCallback(() => {
+    const o = simRef.current.offer;
+    if (o) void send("ACCEPT_ORDER", undefined, { orderId: o.id, source: "manual" });
+  }, [send]);
+  const rejectOffer = useCallback(async () => {
+    const o = simRef.current.offer;
+    if (!o) return;
+    await send("REJECT_ORDER", undefined, { orderId: o.id, source: "manual" });
+    simRef.current.rejectOffer();
+  }, [send]);
 
   // The shared tail of every voice interaction: interpret the transcript → route it
   // (client answer, offer accept/reject, or the engine) → speak back. Factored out
@@ -527,6 +553,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
     tapsOldWay: executed.reduce((s, e) => s + (TAP_COST[e.intent] ?? 2), 0),
   };
 
+  const busy = voice === "processing"; // re-renders (unlike the busyRef used for guards)
   const plat = PLATFORMS[platform];
   const pickup: GeoPoint | null = activeOrder ? { lat: activeOrder.pickup_lat, lng: activeOrder.pickup_lng } : null;
   const drop: GeoPoint | null = activeOrder ? { lat: activeOrder.drop_lat, lng: activeOrder.drop_lng } : null;
@@ -604,9 +631,9 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
           offer={sim.offer}
           secsLeft={sim.offerSecsLeft}
           total={22}
-          onAccept={() => { if (sim.offer) void send("ACCEPT_ORDER", undefined, { orderId: sim.offer.id, source: "manual" }); }}
-          onReject={() => { if (sim.offer) { void send("REJECT_ORDER", undefined, { orderId: sim.offer.id, source: "manual" }); sim.rejectOffer(); } }}
-          disabled={busyRef.current}
+          onAccept={acceptOffer}
+          onReject={() => void rejectOffer()}
+          disabled={busy}
         />
       ) : activeOrder ? (
         <section style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 16 }}>
@@ -638,6 +665,28 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
             <span style={{ fontSize: 16, fontWeight: 800 }}>₹{activeOrder.cod_amount}</span>
           </div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 10 }}>Customer: {activeOrder.customer_name}</div>
+        </section>
+      ) : justPaid ? (
+        <section style={{ background: "var(--surface)", border: "1px solid var(--accent)", borderRadius: 14, padding: 16, animation: "voxrise 200ms ease" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            <span style={{ fontSize: 22 }}>✅</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>Ride complete</div>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>{justPaid.drop_name} · ₹{justPaid.cod_amount} collected</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--accent)" }}>+₹{justPaid.earnings}</div>
+              <div style={{ fontSize: 10, color: "var(--muted)" }}>earned</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 4 }} aria-label="Ride progress — complete">
+            {STEPS.map((s) => (
+              <div key={s.key} style={{ flex: 1, textAlign: "center" }}>
+                <div style={{ height: 4, borderRadius: 2, background: "var(--accent)" }} />
+                <div style={{ fontSize: 9, marginTop: 4, color: s.key === "PAID" ? "var(--accent)" : "var(--muted)" }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
         </section>
       ) : (
         <section style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, textAlign: "center" }}>
@@ -673,7 +722,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
               Hey VOX — hands-free
               {wakeOn && voice === "idle" && <span style={{ color: "var(--accent)", fontSize: 11, fontWeight: 700 }}>● listening</span>}
             </div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>Best-effort — may miss or misfire. Tap-to-talk is always reliable.</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>Best-effort — may miss or misfire; while on, the mic streams to the browser&apos;s speech service. Tap-to-talk is always reliable.</div>
           </div>
           <button role="switch" aria-checked={wakeOn} aria-label="Toggle Hey VOX hands-free" onClick={() => setWakeOn((v) => !v)}
             style={{ width: 46, height: 26, borderRadius: 999, border: "none", cursor: "pointer", background: wakeOn ? "var(--accent)" : "var(--border)", position: "relative", transition: "background 160ms ease", flexShrink: 0 }}>
@@ -698,8 +747,8 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
       {pendingConfirm && (
         <section style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surface)", border: "1px solid var(--warn)", borderRadius: 12, padding: "10px 12px" }}>
           <span style={{ flex: 1, fontSize: 13 }}>Collected ₹{pendingConfirm.amount}?</span>
-          <button onClick={confirmCash} disabled={busyRef.current} style={{ padding: "8px 16px", borderRadius: 9, border: "none", background: "var(--accent)", color: "var(--on-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Yes</button>
-          <button onClick={cancelConfirm} disabled={busyRef.current} style={{ padding: "8px 16px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>No</button>
+          <button onClick={confirmCash} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "none", background: "var(--accent)", color: "var(--on-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Yes</button>
+          <button onClick={cancelConfirm} disabled={busy} style={{ padding: "8px 16px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>No</button>
         </section>
       )}
 
@@ -722,7 +771,7 @@ export default function Dashboard({ hasGemini, hasSarvam, voiceProvider }: Props
         sim={sim}
         order={activeOrder}
         onCommand={runCommand}
-        canCommand={!busyRef.current && voice !== "listening" && voice !== "processing"}
+        canCommand={voice !== "listening" && voice !== "processing"}
         scenarios={{ onNoisy: simulateNoisy, stt: simStt, net: simNet, toggleStt: toggleSimStt, toggleNet: toggleSimNet }}
       />
 

@@ -170,6 +170,7 @@ export function useRideSim(opts: {
 
   // React to the active ride's status: start the right leg once per status change.
   const legStartedRef = useRef<string>("");
+  const arrivedRef = useRef<string>(""); // `${orderId}:${target}` we've already announced
   const prevActiveIdRef = useRef<string | null>(null);
   useEffect(() => {
     const o = activeOrder;
@@ -182,9 +183,10 @@ export function useRideSim(opts: {
       setMoving(false);
       setDistanceToTargetM(null);
       legStartedRef.current = "";
+      arrivedRef.current = "";
       if (prevId) {
         refreshStats();
-        if (onlineRef.current) presentNextOffer(2500);
+        if (onlineRef.current) presentNextOffer(3600); // leave room for the completion card
       }
       prevActiveIdRef.current = null;
       return;
@@ -239,7 +241,11 @@ export function useRideSim(opts: {
         setRider(dest);
         setDistanceToTargetM(0);
         setMoving(false);
-        onArriveRef.current(target, o);
+        const key = `${o.id}:${target}`;
+        if (arrivedRef.current !== key) {
+          arrivedRef.current = key; // announce arrival exactly once per leg
+          onArriveRef.current(target, o);
+        }
         return;
       }
       const next = pointTowards(cur, dest, step);
